@@ -1,0 +1,103 @@
+package app
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+
+	"github.com/wailsapp/wails/v2/pkg/runtime"
+
+	"erd/internal/importers"
+	"erd/internal/schema"
+	"erd/internal/sqlx"
+)
+
+// App is the Wails-bound application for file I/O and export/import.
+type App struct {
+	ctx context.Context
+}
+
+// NewApp returns a new App. Call Startup with the Wails context before using dialogs.
+func NewApp() *App {
+	return &App{}
+}
+
+// Startup is called by Wails when the app starts; store context for dialogs.
+func (a *App) Startup(ctx context.Context) {
+	a.ctx = ctx
+}
+
+// Save writes the diagram JSON to the given path.
+func (a *App) Save(path string, content string) error {
+	return os.WriteFile(path, []byte(content), 0644)
+}
+
+// Load reads the diagram JSON from the given path.
+func (a *App) Load(path string) (string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// SaveFileDialog opens a save file dialog and returns the chosen path, or empty string if cancelled.
+func (a *App) SaveFileDialog(title string, defaultFilename string, filterName string, filterPattern string) (string, error) {
+	opts := runtime.SaveDialogOptions{
+		Title:            title,
+		DefaultFilename:  defaultFilename,
+		DefaultDirectory: "",
+		Filters: []runtime.FileFilter{
+			{DisplayName: filterName, Pattern: filterPattern},
+		},
+	}
+	return runtime.SaveFileDialog(a.ctx, opts)
+}
+
+// OpenFileDialog opens a file dialog and returns the chosen path, or empty string if cancelled.
+func (a *App) OpenFileDialog(title string, filterName string, filterPattern string) (string, error) {
+	opts := runtime.OpenDialogOptions{
+		Title:            title,
+		DefaultDirectory: "",
+		Filters: []runtime.FileFilter{
+			{DisplayName: filterName, Pattern: filterPattern},
+		},
+	}
+	return runtime.OpenFileDialog(a.ctx, opts)
+}
+
+// ExportSQL returns DDL for the given dialect ("postgres" or "bigquery") from the diagram JSON.
+func (a *App) ExportSQL(dialect string, jsonContent string) (string, error) {
+	var d schema.Diagram
+	if err := json.Unmarshal([]byte(jsonContent), &d); err != nil {
+		return "", err
+	}
+	return sqlx.Export(dialect, d)
+}
+
+// ImportSQL parses DDL and returns diagram JSON.
+func (a *App) ImportSQL(sqlContent string) (string, error) {
+	d, err := importers.ParseSQL(sqlContent)
+	if err != nil {
+		return "", err
+	}
+	return d.MarshalJSONString()
+}
+
+// ImportMermaid parses Mermaid ERD and returns diagram JSON.
+func (a *App) ImportMermaid(mermaidContent string) (string, error) {
+	d, err := importers.ParseMermaid(mermaidContent)
+	if err != nil {
+		return "", err
+	}
+	return d.MarshalJSONString()
+}
+
+// ExportMermaid returns Mermaid ERD syntax from the diagram JSON.
+func (a *App) ExportMermaid(jsonContent string) (string, error) {
+	var d schema.Diagram
+	if err := json.Unmarshal([]byte(jsonContent), &d); err != nil {
+		return "", err
+	}
+	return schema.ToMermaid(d), nil
+}

@@ -1,0 +1,11 @@
+build/bin/
+dist/
+node_modules/
+frontend/node_modules/
+.idea/
+.vscode/
+.cursor/
+*.swp
+.DS_Store
+Thumbs.db
+*.exe

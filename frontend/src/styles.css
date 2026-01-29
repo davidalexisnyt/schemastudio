@@ -1,0 +1,260 @@
+:root {
+  --bg: #1e1e2e;
+  --surface: #2a2a3e;
+  --text: #cdd6f4;
+  --muted: #a6adc8;
+  --accent: #89b4fa;
+  --border: #45475a;
+  --danger: #f38ba8;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family:
+    system-ui,
+    -apple-system,
+    sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.toolbar button,
+.toolbar select {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+
+.toolbar button:hover,
+.toolbar select:hover {
+  background: var(--border);
+}
+
+.toolbar button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.toolbar .dropdown {
+  position: relative;
+  display: inline-block;
+}
+
+.toolbar .dropdown-content {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 2px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  min-width: 160px;
+  z-index: 100;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.toolbar .dropdown.open .dropdown-content {
+  display: block;
+}
+
+.toolbar .dropdown-content button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  border-radius: 0;
+  padding: 0.5rem 0.75rem;
+}
+
+.toolbar .dropdown-content button:hover {
+  background: var(--border);
+}
+
+.canvas-wrap {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+.canvas-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+}
+
+.canvas-svg:active {
+  cursor: grabbing;
+}
+
+.canvas-svg .table-group {
+  cursor: move;
+}
+
+.canvas-svg .table-group.selected .table-rect {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.table-rect {
+  fill: var(--surface);
+  stroke: var(--border);
+  stroke-width: 1;
+  rx: 6;
+}
+
+.table-header {
+  fill: var(--accent);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.table-field {
+  fill: var(--text);
+  font-size: 12px;
+}
+
+.relationship-path {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 2;
+  pointer-events: stroke;
+}
+
+.relationship-path.selected {
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+
+.relationship-path:hover {
+  stroke: var(--muted);
+}
+
+.toast {
+  position: fixed;
+  bottom: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0.5rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  z-index: 1000;
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.table-card {
+  position: absolute;
+  min-width: 180px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+}
+
+.table-card .header {
+  padding: 0.5rem 0.75rem;
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+  cursor: move;
+  user-select: none;
+}
+
+.table-card .fields {
+  padding: 0.25rem 0;
+}
+
+.table-card .field-row {
+  display: flex;
+  align-items: center;
+  padding: 0.25rem 0.75rem;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.table-card .field-row:hover {
+  background: var(--border);
+}
+
+.table-card .field-row.selected {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.table-card .add-field {
+  padding: 0.25rem 0.75rem;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.table-card .add-field:hover {
+  color: var(--accent);
+}
+
+.context-menu {
+  position: fixed;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 200;
+  min-width: 140px;
+}
+
+.context-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border: none;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+
+.context-menu button:hover {
+  background: var(--border);
+}
+
+.context-menu button.danger {
+  color: var(--danger);
+}
