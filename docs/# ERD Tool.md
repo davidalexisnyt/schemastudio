@@ -127,3 +127,41 @@ This may be the most difficult to implement so let's leave it for later.
 7. Change the relationship lines to use "crow's foot" notation.
 8. The crows-foot notation is not being displayed on the relationship lines. Please investigate and fix.
 9. This is not working. Please revert all changed made to implement crows-foot notation.
+
+## Some General Design Changes and Updates
+
+1. Field data types should be converted to lowercase everywhere.
+2. Add a line under the table name to separate the name from the fields. Use a darker background for the table name.
+3. Relationship lines should connect to the side of the table closest to the connected table. This should be dynamically adjusted when a table dragged/repositioned.
+4. Relationship lines should show a directional arrowhead indicator where the line connects to the foreign key table. The indicator must be displayed on the outside of the table border.
+5. The PNG export does not work. The tables and and lines appear as black blobs. The PNG export should be styled as if in light mode.
+6. Implement a dark/light mode theme switch.
+
+## New/Updated Relationship Capabilities
+
+Display the popup Relationship editor dialog when a relationship line is double clicked. This should be the same dialog displayed when the user is first creating a relationship.
+
+Display an information tooltip when the user hovers over a relationship line. The tooltip should show the relationship name (if the user had entered one), the cardinality, and the source and target fields.
+
+## Table Editor Changes
+
+Fields
+
+- Display as a table with headers - Name, Type, Nullable, Primary Key - and a final column for the Remove button.
+- Allow the user to drag fields up or down in the table to reposition the order of the fields.
+- Change the "Remove" button to have a delete icon instead of text.
+- Change the "Add field" button to be a cleaner "+" button at the bottom of the table.
+- Add a new section after the Fields table called Relationships.
+  - The Relationships section should display any existing relationships.
+  - Create an Add button that adds a new relationship.
+  - Allow the user to specify whether the current table is the source or target of the relationship.
+  - Each relationship shows a target table at the top and a table with Source Field and Target Field columns.
+  - Allow the user to select from a dropdown of existing tables for the target table.
+  - Allow the user to select a field (dropdown list) from the source current table and the associated field (dropdown) from the target table.
+  - Display an Add Field button to allow the user to add more related fields.
+
+### BigQuery Export
+
+General Rules
+
+- Do no surround field names with back-ticks unless the name has spaces
