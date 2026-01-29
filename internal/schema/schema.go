@@ -26,14 +26,19 @@ type Field struct {
 	Type string `json:"type"`
 }
 
-// Relationship links a source field to a target field.
+// Relationship links source field(s) to target field(s).
 type Relationship struct {
-	ID             string `json:"id"`
-	SourceTableID  string `json:"sourceTableId"`
-	SourceFieldID  string `json:"sourceFieldId"`
-	TargetTableID  string `json:"targetTableId"`
-	TargetFieldID  string `json:"targetFieldId"`
-	Label          string `json:"label,omitempty"`
+	ID              string   `json:"id"`
+	SourceTableID   string   `json:"sourceTableId"`
+	SourceFieldID   string   `json:"sourceFieldId"`
+	TargetTableID   string   `json:"targetTableId"`
+	TargetFieldID   string   `json:"targetFieldId"`
+	Label           string   `json:"label,omitempty"`
+	SourceFieldIDs  []string `json:"sourceFieldIds,omitempty"`
+	TargetFieldIDs  []string `json:"targetFieldIds,omitempty"`
+	Name            string   `json:"name,omitempty"`
+	Note            string   `json:"note,omitempty"`
+	Cardinality     string   `json:"cardinality,omitempty"`
 }
 
 // Viewport stores pan/zoom state.

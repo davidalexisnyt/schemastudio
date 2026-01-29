@@ -25,7 +25,22 @@ export interface Relationship {
   targetTableId: string;
   targetFieldId: string;
   label?: string;
+  sourceFieldIds?: string[];
+  targetFieldIds?: string[];
+  name?: string;
+  note?: string;
+  cardinality?: string;
 }
+
+export const CARDINALITY_OPTIONS = [
+  "1-to-1",
+  "1-to-many",
+  "many-to-1",
+  "many-to-many",
+  "0/1-to-0/1",
+  "0/1-to-many",
+  "many-to-0/many",
+] as const;
 
 export interface Diagram {
   version: number;

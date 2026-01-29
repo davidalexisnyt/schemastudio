@@ -59,3 +59,71 @@ Given the above requirements, please provide a detailed plan for the project inc
 - The user experience design
 - The testing strategy
 - The deployment strategy
+
+---
+
+# Addressing Issues in Inital Build
+
+The initial build of the app looks great, but there are a few issues and unimplemented features. Let's work on them incrementally.
+
+## Things That Work Well
+
+- Add Table: The basic feature works well to add a new table template to the canvas. We need to work on what happens after the new table template is added to the canvas.
+- Save: The save feature works as expected.
+- Load: The load feature works as expected and the diagram gets displayed exactly as it was when it was saved.
+- Undo and Redo: These work very well.
+
+## Things That Need Work
+
+- Table editing. This does not work. The Edit context menu is able to get displayed (with difficulty) only once, but does not seem to enable the table to be edited. Then the menu never shows up again.
+- Connect: Connecting two tables works, and the relationship lines remain connected when the tables are dragged around. However, the UX is not ideal.
+- Import: Does not seem to be implemented. Clicking on the button does nothing.
+- Export: Does not seem to be implemented. Clicking on the button does nothing.
+- Layout: Does not seem to be implemented. Clicking on the button does nothing.
+
+Let's create a plan for addressing these issues in phases
+
+## Phase 1 - Edit Tables
+
+Let's change the UX for table editing.
+
+- Show a popup editor dialog with the table details when the user double-clicks on a table.
+- Allow the user to make changes to the table name and fields, then click an OK button to persist the changes and update the diagram.
+
+## Phase 2 - Connect
+
+Let's improve the UX of the Connect feature
+
+- Don't use the Connect button to initiate the feature. Let's remove the button.
+- To connect tables, allow the user to click and drag from the field section of a table onto another table.
+  - Once the user starts dragging, display a connection line that starts at the edge of the current table and ends at the mouse cursor. The line should follow the cursor until the user releases the mouse over the target table.
+  - Display a popup dialog with the source table and target table names. Allow the user to specify one or more fields from the source table and one or more fields from the target table to define the table relationship.
+    - Allow the user to enter a name for the relationship.
+    - Allow the user to enter a note about the relationship.
+    - Allow the user to specify the nature of the relationship: 1-to-1, 1-to-many, many-to-many, 0/1-to-0/many, etc.
+  - The table editor dialog should be modal and should only be closed by the user clicking on OK or Cancel. It should not close if the user clicks outside the dialog.
+  - Focus should go to the name entry for the new field when the user clicks the "Add field" button.
+
+## Phase 3 - Import/Export
+
+The code for SQL and Mermaid importers were generated in the initial build, but they don't seem to be connected to the UI. Let's get the "Import" button/dropdown functionality connected and working.
+
+Code for exporters was also generated in the initial build, but the Export button/dropdown does nothing. Let's get that implemented.
+
+## Phase 4 - Layout
+
+This may be the most difficult to implement so let's leave it for later.
+
+---
+
+## Interim Prompts for Addressing Issues
+
+1. The table editor dialog should not close if the user clicks outside of it. It should only close by clicking the OK or Cancel buttons.
+2. In the table editor, focus should go to the name entry for the new field when the user clicks the "Add field" button.
+3. The Import dropdown menu now works, but the only option that seems to be working is the JSON import. Selecting the SQL import allows a SQL file to be selected, but nothing happens. If there is an error occuring, the user is not notified. Let's add a collapsible, resizable bottom panel for displaying status info and errors. Determine why no diagram gets created when importing a SQL file.
+4. When the bottom panel is collapsed by clicking the collapse button, it seems to completely go away. Provide a visual indicator of its collapsed state at the bottom of the screen and something that the user can click to show the panel again.
+5. For the Layout feature, enforce a minimum gap between tables so that they don't end up looking connected.
+6. The gap between the tables is now much larger than the defined MIN_LAYOUT_GAP value for all of the layout options. Please determine why this is, and address it.
+7. Change the relationship lines to use "crow's foot" notation.
+8. The crows-foot notation is not being displayed on the relationship lines. Please investigate and fix.
+9. This is not working. Please revert all changed made to implement crows-foot notation.

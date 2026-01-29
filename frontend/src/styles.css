@@ -258,3 +258,257 @@ body {
 .context-menu button.danger {
   color: var(--danger);
 }
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 300;
+}
+
+.modal-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  min-width: 360px;
+  max-width: 90vw;
+  max-height: 85vh;
+  overflow: auto;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
+
+.modal-title {
+  margin: 0 0 1rem;
+  font-size: 1.125rem;
+  color: var(--accent);
+}
+
+.modal-panel label {
+  display: block;
+  margin-top: 0.75rem;
+  margin-bottom: 0.25rem;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+.modal-fields-label {
+  margin-top: 1rem;
+}
+
+.modal-input {
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.875rem;
+}
+
+.modal-fields-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.modal-field-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.modal-field-name {
+  flex: 1;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.875rem;
+}
+
+.modal-field-type {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.875rem;
+  min-width: 100px;
+}
+
+.modal-field-remove {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--danger);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.modal-field-remove:hover {
+  background: var(--border);
+}
+
+.modal-add-field {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--accent);
+  font-size: 0.875rem;
+  cursor: pointer;
+  margin-bottom: 1rem;
+}
+
+.modal-add-field:hover {
+  background: var(--border);
+}
+
+.modal-buttons {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 1rem;
+}
+
+.modal-buttons button {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.modal-buttons button:hover {
+  background: var(--border);
+}
+
+.modal-readonly {
+  margin: 0.5rem 0;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+.modal-checkbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 0.5rem;
+}
+
+.modal-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.modal-panel textarea.modal-textarea {
+  resize: vertical;
+  min-height: 60px;
+}
+
+/* Status panel (collapsible, resizable bottom panel) */
+.status-panel {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  overflow: hidden;
+  transition: height 0.15s ease;
+}
+
+.status-panel.status-panel-collapsed .status-panel-content,
+.status-panel.status-panel-collapsed .status-panel-resize {
+  display: none;
+}
+
+.status-panel.status-panel-collapsed .status-panel-header {
+  cursor: pointer;
+  border-top: 1px solid var(--accent);
+  background: var(--surface);
+}
+
+.status-panel.status-panel-collapsed .status-panel-header:hover {
+  background: var(--border);
+}
+
+.status-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.35rem 0.5rem;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.status-panel-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.status-panel-collapse {
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.875rem;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.status-panel-collapse:hover {
+  background: var(--border);
+}
+
+.status-panel-resize {
+  height: 4px;
+  background: var(--border);
+  cursor: ns-resize;
+  flex-shrink: 0;
+}
+
+.status-panel-resize:hover {
+  background: var(--accent);
+}
+
+.status-panel-content {
+  flex: 1;
+  overflow: auto;
+  padding: 0.5rem 0.75rem;
+  font-family: ui-monospace, monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--muted);
+  min-height: 2rem;
+}
+
+.status-line {
+  margin-bottom: 0.25rem;
+  word-break: break-word;
+}
+
+.status-line-info {
+  color: var(--muted);
+}
+
+.status-line-error {
+  color: var(--danger);
+}

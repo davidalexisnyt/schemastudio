@@ -5,6 +5,7 @@ frontend/node_modules/
 .idea/
 .vscode/
 .cursor/
+files/
 *.swp
 .DS_Store
 Thumbs.db

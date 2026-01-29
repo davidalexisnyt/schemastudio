@@ -1,7 +1,8 @@
 import type { Diagram, Table, Field, Relationship, Selection } from "./types";
+import { FIELD_TYPES, CARDINALITY_OPTIONS } from "./types";
 import { Store } from "./store";
 import {
-  getRelationshipPath,
+  getRelationshipPaths,
   getFieldAnchor,
   TABLE_WIDTH,
   ROW_HEIGHT,
@@ -17,7 +18,6 @@ let isPanning = false;
 let panStart = { x: 0, y: 0 };
 let dragTableId: string | null = null;
 let dragStart = { x: 0, y: 0 };
-let connectMode = false;
 let connectSource: { tableId: string; fieldId: string } | null = null;
 let connectLine: { x: number; y: number } | null = null;
 let container: HTMLElement;
@@ -26,6 +26,22 @@ let transformGroup: SVGGElement;
 let tablesLayer: SVGGElement;
 let relationshipsLayer: SVGGElement;
 let tempLine: SVGPathElement | null = null;
+let statusPanelContent: HTMLElement | null = null;
+let statusPanelEl: HTMLElement | null = null;
+const DEFAULT_STATUS_HEIGHT = 120;
+const COLLAPSED_STATUS_HEIGHT = 28;
+let statusPanelHeight = DEFAULT_STATUS_HEIGHT;
+let statusPanelCollapsed = false;
+
+function appendStatus(message: string, type: "info" | "error" = "info"): void {
+  if (!statusPanelContent) return;
+  const line = document.createElement("div");
+  line.className = "status-line status-line-" + type;
+  const ts = new Date().toLocaleTimeString();
+  line.textContent = `[${ts}] ${message}`;
+  statusPanelContent.appendChild(line);
+  statusPanelContent.scrollTop = statusPanelContent.scrollHeight;
+}
 
 function emitSelection(): void {
   container.dispatchEvent(
@@ -60,21 +76,28 @@ function render(): void {
   relationshipsLayer.innerHTML = "";
 
   d.relationships.forEach((r) => {
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", getRelationshipPath(d, r));
-    path.setAttribute(
-      "class",
-      "relationship-path" +
-        (selection?.type === "relationship" && selection.relationshipId === r.id
-          ? " selected"
-          : ""),
-    );
-    path.dataset.relationshipId = r.id;
-    path.addEventListener("click", (e) => {
-      e.stopPropagation();
-      setSelection({ type: "relationship", relationshipId: r.id });
+    const pathDs = getRelationshipPaths(d, r);
+    pathDs.forEach((pathD) => {
+      const path = document.createElementNS(
+        "http://www.w3.org/2000/svg",
+        "path",
+      );
+      path.setAttribute("d", pathD);
+      path.setAttribute(
+        "class",
+        "relationship-path" +
+          (selection?.type === "relationship" &&
+          selection.relationshipId === r.id
+            ? " selected"
+            : ""),
+      );
+      path.dataset.relationshipId = r.id;
+      path.addEventListener("click", (e) => {
+        e.stopPropagation();
+        setSelection({ type: "relationship", relationshipId: r.id });
+      });
+      relationshipsLayer.appendChild(path);
     });
-    relationshipsLayer.appendChild(path);
   });
 
   d.tables.forEach((t) => {
@@ -87,6 +110,7 @@ function render(): void {
           : ""),
     );
     g.setAttribute("transform", `translate(${t.x}, ${t.y})`);
+    (g as HTMLElement).dataset.tableId = t.id;
 
     const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
     const h = HEADER_HEIGHT + t.fields.length * ROW_HEIGHT;
@@ -126,38 +150,21 @@ function render(): void {
       row.dataset.tableId = t.id;
       row.dataset.fieldId = f.id;
       row.style.cursor = "pointer";
+      row.addEventListener("mousedown", (e) => {
+        if (e.button !== 0) return;
+        e.stopPropagation();
+        connectSource = { tableId: t.id, fieldId: f.id };
+        tempLine = document.createElementNS(
+          "http://www.w3.org/2000/svg",
+          "path",
+        );
+        tempLine.setAttribute("class", "relationship-path");
+        tempLine.setAttribute("d", "M 0 0 L 0 0");
+        connectLine = { x: 0, y: 0 };
+        relationshipsLayer.appendChild(tempLine);
+      });
       row.addEventListener("click", (e) => {
         e.stopPropagation();
-        if (connectMode && connectSource) {
-          if (
-            connectSource.tableId !== t.id ||
-            connectSource.fieldId !== f.id
-          ) {
-            store.addRelationship(
-              connectSource.tableId,
-              connectSource.fieldId,
-              t.id,
-              f.id,
-            );
-            connectSource = null;
-            if (tempLine) tempLine.remove();
-            tempLine = null;
-          }
-          return;
-        }
-        if (connectMode && !connectSource) {
-          connectSource = { tableId: t.id, fieldId: f.id };
-          tempLine = document.createElementNS(
-            "http://www.w3.org/2000/svg",
-            "path",
-          );
-          tempLine.setAttribute("class", "relationship-path");
-          tempLine.setAttribute("d", "M 0 0 L 0 0");
-          connectLine = { x: 0, y: 0 };
-          relationshipsLayer.appendChild(tempLine);
-          setSelection({ type: "field", tableId: t.id, fieldId: f.id });
-          return;
-        }
         setSelection({ type: "field", tableId: t.id, fieldId: f.id });
       });
       g.appendChild(row);
@@ -165,16 +172,21 @@ function render(): void {
 
     rect.addEventListener("click", (e) => {
       e.stopPropagation();
-      if (connectSource) return;
       setSelection({ type: "table", tableId: t.id });
     });
 
     g.addEventListener("mousedown", (e) => {
-      if (e.button !== 0 || connectSource) return;
+      if (e.button !== 0) return;
       if ((e.target as Element).closest("text[data-field-id]")) return;
       dragTableId = t.id;
       const pt = screenToDiagram(e.clientX, e.clientY);
       dragStart = { x: pt.x - t.x, y: pt.y - t.y };
+    });
+
+    g.addEventListener("dblclick", (e) => {
+      e.stopPropagation();
+      if ((e.target as Element).closest("text[data-field-id]")) return;
+      showTableEditor(t.id);
     });
 
     tablesLayer.appendChild(g);
@@ -360,33 +372,18 @@ function setupToolbar(): void {
   importDiv.appendChild(importContent);
   toolbar.appendChild(importDiv);
 
-  const connectBtn = document.createElement("button");
-  connectBtn.textContent = "Connect";
-  connectBtn.onclick = () => {
-    connectMode = !connectMode;
-    if (!connectMode) {
-      connectSource = null;
-      if (tempLine) tempLine.remove();
-      tempLine = null;
-    }
-    showToast(
-      connectMode
-        ? "Click a field, then click another field to connect"
-        : "Connect mode off",
-    );
-  };
-  toolbar.appendChild(connectBtn);
-
   store.subscribe(() => {
     undoBtn.disabled = !store.canUndo();
     redoBtn.disabled = !store.canRedo();
     render();
   });
 
-  document.body.addEventListener("click", () => {
-    layoutDiv.classList.remove("open");
-    exportDiv.classList.remove("open");
-    importDiv.classList.remove("open");
+  document.body.addEventListener("click", (e) => {
+    if (!(e.target as Element).closest(".dropdown")) {
+      layoutDiv.classList.remove("open");
+      exportDiv.classList.remove("open");
+      importDiv.classList.remove("open");
+    }
   });
 
   container.appendChild(toolbar);
@@ -460,9 +457,17 @@ async function openAndImportJSON(): Promise<void> {
   }
   const path = await bridge.openFileDialog("Open JSON", "JSON", "*.json");
   if (!path) return;
-  const raw = await bridge.loadFile(path);
-  store.setDiagram(JSON.parse(raw));
-  showToast("Imported JSON");
+  try {
+    const raw = await bridge.loadFile(path);
+    const d = JSON.parse(raw) as Diagram;
+    store.setDiagram(d);
+    appendStatus(`Imported JSON from ${path}: ${d.tables.length} tables`);
+    showToast("Imported JSON");
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    appendStatus(`JSON import failed: ${msg}`, "error");
+    showToast("Import failed");
+  }
 }
 
 async function openAndImportSQL(): Promise<void> {
@@ -472,10 +477,28 @@ async function openAndImportSQL(): Promise<void> {
   }
   const path = await bridge.openFileDialog("Open SQL", "SQL", "*.sql");
   if (!path) return;
-  const raw = await bridge.loadFile(path);
-  const json = await bridge.importSQL(raw);
-  store.setDiagram(JSON.parse(json));
-  showToast("Imported SQL");
+  try {
+    const raw = await bridge.loadFile(path);
+    const json = await bridge.importSQL(raw);
+    const d = JSON.parse(json) as Diagram;
+    store.setDiagram(d);
+    appendStatus(
+      `Imported SQL from ${path}: ${d.tables.length} tables, ${d.relationships.length} relationships`,
+    );
+    if (d.tables.length === 0) {
+      appendStatus(
+        "No CREATE TABLE statements found. The parser expects PostgreSQL-style DDL: CREATE TABLE name ( col type, ... ); with optional PRIMARY KEY and FOREIGN KEY.",
+        "error",
+      );
+      showToast("No tables found — check Status panel for expected format");
+    } else {
+      showToast("Imported SQL");
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    appendStatus(`SQL import failed: ${msg}`, "error");
+    showToast("Import failed");
+  }
 }
 
 async function openAndImportMermaid(): Promise<void> {
@@ -489,10 +512,102 @@ async function openAndImportMermaid(): Promise<void> {
     "*.md;*.mmd",
   );
   if (!path) return;
-  const raw = await bridge.loadFile(path);
-  const json = await bridge.importMermaid(raw);
-  store.setDiagram(JSON.parse(json));
-  showToast("Imported Mermaid");
+  try {
+    const raw = await bridge.loadFile(path);
+    const json = await bridge.importMermaid(raw);
+    const d = JSON.parse(json) as Diagram;
+    store.setDiagram(d);
+    appendStatus(`Imported Mermaid from ${path}: ${d.tables.length} tables`);
+    if (d.tables.length === 0) {
+      appendStatus(
+        "No entities found. Expected Mermaid erDiagram with entity { } blocks.",
+        "error",
+      );
+    }
+    showToast("Imported Mermaid");
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    appendStatus(`Mermaid import failed: ${msg}`, "error");
+    showToast("Import failed");
+  }
+}
+
+function setupStatusPanel(): void {
+  const panel = document.createElement("div");
+  panel.className = "status-panel";
+  panel.style.height = statusPanelHeight + "px";
+  statusPanelEl = panel;
+  const header = document.createElement("div");
+  header.className = "status-panel-header";
+  const label = document.createElement("span");
+  label.textContent = "Status";
+  label.className = "status-panel-label";
+  const collapseBtn = document.createElement("button");
+  collapseBtn.type = "button";
+  collapseBtn.className = "status-panel-collapse";
+  collapseBtn.textContent = "−";
+  collapseBtn.title = "Collapse / Expand";
+  collapseBtn.onclick = (e) => {
+    e.stopPropagation();
+    statusPanelCollapsed = !statusPanelCollapsed;
+    if (statusPanelCollapsed) {
+      panel.style.height = COLLAPSED_STATUS_HEIGHT + "px";
+      panel.classList.add("status-panel-collapsed");
+      collapseBtn.textContent = "▲";
+      collapseBtn.title = "Click to show status panel";
+      label.textContent = "Status — click to expand";
+    } else {
+      panel.style.height = statusPanelHeight + "px";
+      panel.classList.remove("status-panel-collapsed");
+      collapseBtn.textContent = "−";
+      collapseBtn.title = "Collapse / Expand";
+      label.textContent = "Status";
+    }
+  };
+  header.appendChild(label);
+  header.appendChild(collapseBtn);
+  header.onclick = () => {
+    if (statusPanelCollapsed) {
+      statusPanelCollapsed = false;
+      panel.style.height = statusPanelHeight + "px";
+      panel.classList.remove("status-panel-collapsed");
+      collapseBtn.textContent = "−";
+      collapseBtn.title = "Collapse / Expand";
+      label.textContent = "Status";
+    }
+  };
+  panel.appendChild(header);
+  const resizeHandle = document.createElement("div");
+  resizeHandle.className = "status-panel-resize";
+  resizeHandle.title = "Drag to resize";
+  let resizeStartY = 0;
+  let resizeStartH = 0;
+  resizeHandle.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    resizeStartY = e.clientY;
+    resizeStartH = statusPanelHeight;
+    const onMove = (e2: MouseEvent) => {
+      const dy = resizeStartY - e2.clientY;
+      const newH = Math.max(60, Math.min(400, resizeStartH + dy));
+      statusPanelHeight = newH;
+      if (!statusPanelCollapsed) {
+        panel.style.height = newH + "px";
+      }
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
+  panel.appendChild(resizeHandle);
+  const content = document.createElement("div");
+  content.className = "status-panel-content";
+  statusPanelContent = content;
+  panel.appendChild(content);
+  container.appendChild(panel);
 }
 
 function setupCanvas(): void {
@@ -518,6 +633,7 @@ function setupCanvas(): void {
   };
   resize();
   new ResizeObserver(resize).observe(wrap);
+  setupStatusPanel();
 
   svg.addEventListener("mousedown", (e) => {
     if (e.button !== 0) return;
@@ -529,7 +645,7 @@ function setupCanvas(): void {
       if (!(e.target as Element).closest("g.table-group")) {
         setSelection(null);
       }
-      if (!connectSource && !(e.target as Element).closest("g.table-group")) {
+      if (!(e.target as Element).closest("g.table-group")) {
         isPanning = true;
         panStart = { x: e.clientX - pan.x, y: e.clientY - pan.y };
       }
@@ -560,9 +676,38 @@ function setupCanvas(): void {
     }
   });
 
-  svg.addEventListener("mouseup", () => {
+  svg.addEventListener("mouseup", (e) => {
+    if (connectSource) {
+      const pt = screenToDiagram(e.clientX, e.clientY);
+      const d = store.getDiagram();
+      const targetTable = d.tables.find((t) => {
+        const w = TABLE_WIDTH;
+        const h = HEADER_HEIGHT + t.fields.length * ROW_HEIGHT;
+        return pt.x >= t.x && pt.x <= t.x + w && pt.y >= t.y && pt.y <= t.y + h;
+      });
+      if (targetTable && targetTable.id !== connectSource.tableId) {
+        showRelationshipDialog(
+          connectSource.tableId,
+          connectSource.fieldId,
+          targetTable.id,
+        );
+      }
+      connectSource = null;
+      if (tempLine) tempLine.remove();
+      tempLine = null;
+      render();
+    }
     isPanning = false;
     dragTableId = null;
+  });
+
+  window.addEventListener("mouseup", () => {
+    if (connectSource) {
+      connectSource = null;
+      if (tempLine) tempLine.remove();
+      tempLine = null;
+      render();
+    }
   });
 
   svg.addEventListener("mouseleave", () => {
@@ -607,9 +752,7 @@ function setupCanvas(): void {
       showContextMenu(e.clientX, e.clientY, [
         {
           label: "Edit",
-          fn: () => {
-            /* TODO inline edit */
-          },
+          fn: () => showTableEditor(tableId),
         },
         {
           label: "Delete",
@@ -656,6 +799,249 @@ function setupCanvas(): void {
   });
 }
 
+function showTableEditor(tableId: string): void {
+  const d = store.getDiagram();
+  const t = d.tables.find((x) => x.id === tableId);
+  if (!t) return;
+  const existing = document.querySelector(".modal-overlay");
+  if (existing) existing.remove();
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  const panel = document.createElement("div");
+  panel.className = "modal-panel";
+  const title = document.createElement("h2");
+  title.className = "modal-title";
+  title.textContent = "Edit Table";
+  panel.appendChild(title);
+  const nameLabel = document.createElement("label");
+  nameLabel.textContent = "Table name";
+  nameLabel.htmlFor = "table-editor-name";
+  panel.appendChild(nameLabel);
+  const nameInput = document.createElement("input");
+  nameInput.id = "table-editor-name";
+  nameInput.type = "text";
+  nameInput.value = t.name;
+  nameInput.className = "modal-input";
+  panel.appendChild(nameInput);
+  const fieldsLabel = document.createElement("label");
+  fieldsLabel.textContent = "Fields";
+  fieldsLabel.className = "modal-fields-label";
+  panel.appendChild(fieldsLabel);
+  const fieldsContainer = document.createElement("div");
+  fieldsContainer.className = "modal-fields-list";
+  const rows: {
+    id?: string;
+    nameInput: HTMLInputElement;
+    typeSelect: HTMLSelectElement;
+    el: HTMLElement;
+  }[] = [];
+  function addFieldRow(f: { id?: string; name: string; type: string }) {
+    const row = document.createElement("div");
+    row.className = "modal-field-row";
+    const nameIn = document.createElement("input");
+    nameIn.type = "text";
+    nameIn.value = f.name;
+    nameIn.placeholder = "Field name";
+    nameIn.className = "modal-field-name";
+    const typeSel = document.createElement("select");
+    typeSel.className = "modal-field-type";
+    FIELD_TYPES.forEach((ft) => {
+      const opt = document.createElement("option");
+      opt.value = ft;
+      opt.textContent = ft;
+      if (ft === f.type) opt.selected = true;
+      typeSel.appendChild(opt);
+    });
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.textContent = "Remove";
+    removeBtn.className = "modal-field-remove";
+    removeBtn.onclick = () => {
+      const idx = rows.findIndex((r) => r.el === row);
+      if (idx >= 0) rows.splice(idx, 1);
+      row.remove();
+    };
+    row.appendChild(nameIn);
+    row.appendChild(typeSel);
+    row.appendChild(removeBtn);
+    fieldsContainer.appendChild(row);
+    const rec = { id: f.id, nameInput: nameIn, typeSelect: typeSel, el: row };
+    rows.push(rec);
+    return nameIn;
+  }
+  t.fields.forEach((f) =>
+    addFieldRow({ id: f.id, name: f.name, type: f.type }),
+  );
+  panel.appendChild(fieldsContainer);
+  const addFieldBtn = document.createElement("button");
+  addFieldBtn.type = "button";
+  addFieldBtn.textContent = "Add field";
+  addFieldBtn.className = "modal-add-field";
+  addFieldBtn.onclick = () => {
+    const newNameInput = addFieldRow({ name: "field", type: "TEXT" });
+    requestAnimationFrame(() => newNameInput.focus());
+  };
+  panel.appendChild(addFieldBtn);
+  const buttons = document.createElement("div");
+  buttons.className = "modal-buttons";
+  const okBtn = document.createElement("button");
+  okBtn.type = "button";
+  okBtn.textContent = "OK";
+  okBtn.onclick = () => {
+    const name = nameInput.value.trim() || t.name;
+    const fields = rows.map((r) => ({
+      id: r.id,
+      name: r.nameInput.value.trim() || "field",
+      type: r.typeSelect.value,
+    }));
+    store.replaceTableContent(tableId, name, fields);
+    overlay.remove();
+    render();
+  };
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.textContent = "Cancel";
+  cancelBtn.onclick = () => overlay.remove();
+  buttons.appendChild(okBtn);
+  buttons.appendChild(cancelBtn);
+  panel.appendChild(buttons);
+  overlay.appendChild(panel);
+  document.body.appendChild(overlay);
+}
+
+function showRelationshipDialog(
+  sourceTableId: string,
+  sourceFieldId: string,
+  targetTableId: string,
+): void {
+  const d = store.getDiagram();
+  const srcT = d.tables.find((t) => t.id === sourceTableId);
+  const tgtT = d.tables.find((t) => t.id === targetTableId);
+  if (!srcT || !tgtT) return;
+  const existing = document.querySelector(".modal-overlay");
+  if (existing) existing.remove();
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  const panel = document.createElement("div");
+  panel.className = "modal-panel modal-panel-relationship";
+  const title = document.createElement("h2");
+  title.className = "modal-title";
+  title.textContent = "New Relationship";
+  panel.appendChild(title);
+  const srcLabel = document.createElement("div");
+  srcLabel.className = "modal-readonly";
+  srcLabel.textContent = `From: ${srcT.name}`;
+  panel.appendChild(srcLabel);
+  const tgtLabel = document.createElement("div");
+  tgtLabel.className = "modal-readonly";
+  tgtLabel.textContent = `To: ${tgtT.name}`;
+  panel.appendChild(tgtLabel);
+  const srcFieldsLabel = document.createElement("label");
+  srcFieldsLabel.textContent = "Source fields";
+  srcFieldsLabel.className = "modal-fields-label";
+  panel.appendChild(srcFieldsLabel);
+  const srcFieldsContainer = document.createElement("div");
+  srcFieldsContainer.className = "modal-checkbox-list";
+  const srcChecks: { id: string; cb: HTMLInputElement }[] = [];
+  srcT.fields.forEach((f) => {
+    const label = document.createElement("label");
+    label.className = "modal-checkbox-row";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = f.id === sourceFieldId;
+    cb.dataset.fieldId = f.id;
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode(` ${f.name} (${f.type})`));
+    srcFieldsContainer.appendChild(label);
+    srcChecks.push({ id: f.id, cb });
+  });
+  panel.appendChild(srcFieldsContainer);
+  const tgtFieldsLabel = document.createElement("label");
+  tgtFieldsLabel.textContent = "Target fields";
+  tgtFieldsLabel.className = "modal-fields-label";
+  panel.appendChild(tgtFieldsLabel);
+  const tgtFieldsContainer = document.createElement("div");
+  tgtFieldsContainer.className = "modal-checkbox-list";
+  const tgtChecks: { id: string; cb: HTMLInputElement }[] = [];
+  tgtT.fields.forEach((f) => {
+    const label = document.createElement("label");
+    label.className = "modal-checkbox-row";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.dataset.fieldId = f.id;
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode(` ${f.name} (${f.type})`));
+    tgtFieldsContainer.appendChild(label);
+    tgtChecks.push({ id: f.id, cb });
+  });
+  panel.appendChild(tgtFieldsContainer);
+  const nameLabel = document.createElement("label");
+  nameLabel.textContent = "Relationship name";
+  panel.appendChild(nameLabel);
+  const nameInput = document.createElement("input");
+  nameInput.type = "text";
+  nameInput.placeholder = "Optional";
+  nameInput.className = "modal-input";
+  panel.appendChild(nameInput);
+  const noteLabel = document.createElement("label");
+  noteLabel.textContent = "Note";
+  panel.appendChild(noteLabel);
+  const noteInput = document.createElement("textarea");
+  noteInput.placeholder = "Optional";
+  noteInput.className = "modal-input modal-textarea";
+  noteInput.rows = 2;
+  panel.appendChild(noteInput);
+  const cardLabel = document.createElement("label");
+  cardLabel.textContent = "Cardinality";
+  panel.appendChild(cardLabel);
+  const cardSelect = document.createElement("select");
+  cardSelect.className = "modal-input";
+  CARDINALITY_OPTIONS.forEach((c) => {
+    const opt = document.createElement("option");
+    opt.value = c;
+    opt.textContent = c;
+    cardSelect.appendChild(opt);
+  });
+  panel.appendChild(cardSelect);
+  const buttons = document.createElement("div");
+  buttons.className = "modal-buttons";
+  const okBtn = document.createElement("button");
+  okBtn.type = "button";
+  okBtn.textContent = "OK";
+  okBtn.onclick = () => {
+    const sourceFieldIds = srcChecks
+      .filter((r) => r.cb.checked)
+      .map((r) => r.id);
+    const targetFieldIds = tgtChecks
+      .filter((r) => r.cb.checked)
+      .map((r) => r.id);
+    if (sourceFieldIds.length === 0 || targetFieldIds.length === 0) {
+      showToast("Select at least one source and one target field");
+      return;
+    }
+    store.addRelationshipWithMeta(
+      sourceTableId,
+      sourceFieldIds,
+      targetTableId,
+      targetFieldIds,
+      nameInput.value.trim() || undefined,
+      noteInput.value.trim() || undefined,
+      cardSelect.value || undefined,
+    );
+    overlay.remove();
+    render();
+  };
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.textContent = "Cancel";
+  cancelBtn.onclick = () => overlay.remove();
+  buttons.appendChild(okBtn);
+  buttons.appendChild(cancelBtn);
+  panel.appendChild(buttons);
+  overlay.appendChild(panel);
+  document.body.appendChild(overlay);
+}
+
 function showContextMenu(
   x: number,
   y: number,
@@ -692,4 +1078,5 @@ export function init(el: HTMLElement): void {
   setupToolbar();
   setupCanvas();
   render();
+  appendStatus("Ready. Use Import/Export from the toolbar.");
 }

@@ -107,6 +107,41 @@ export class Store {
     this.notify();
   }
 
+  replaceTableContent(
+    tableId: string,
+    name: string,
+    fields: { id?: string; name: string; type: string }[],
+  ): void {
+    this.pushUndo();
+    const t = this.diagram.tables.find((x) => x.id === tableId);
+    if (!t) return;
+    t.name = name;
+    const existingIds = new Set(t.fields.map((f) => f.id));
+    const newFields: Field[] = [];
+    for (const row of fields) {
+      if (row.id && existingIds.has(row.id)) {
+        const f = t.fields.find((x) => x.id === row.id)!;
+        f.name = row.name;
+        f.type = row.type;
+        newFields.push(f);
+      } else {
+        newFields.push({
+          id: row.id ?? nextId("f"),
+          name: row.name,
+          type: row.type,
+        });
+      }
+    }
+    const keptIds = new Set(newFields.map((f) => f.id));
+    this.diagram.relationships = this.diagram.relationships.filter(
+      (r) =>
+        !(r.sourceTableId === tableId && !keptIds.has(r.sourceFieldId)) &&
+        !(r.targetTableId === tableId && !keptIds.has(r.targetFieldId)),
+    );
+    t.fields = newFields;
+    this.notify();
+  }
+
   deleteTable(tableId: string): void {
     this.pushUndo();
     this.diagram.tables = this.diagram.tables.filter((t) => t.id !== tableId);
@@ -177,6 +212,33 @@ export class Store {
     return r;
   }
 
+  addRelationshipWithMeta(
+    sourceTableId: string,
+    sourceFieldIds: string[],
+    targetTableId: string,
+    targetFieldIds: string[],
+    name?: string,
+    note?: string,
+    cardinality?: string,
+  ): Relationship {
+    this.pushUndo();
+    const r: Relationship = {
+      id: nextId("r"),
+      sourceTableId,
+      sourceFieldId: sourceFieldIds[0] ?? "",
+      targetTableId,
+      targetFieldId: targetFieldIds[0] ?? "",
+      sourceFieldIds,
+      targetFieldIds,
+      name: name ?? "",
+      note: note ?? "",
+      cardinality: cardinality ?? "",
+    };
+    this.diagram.relationships.push(r);
+    this.notify();
+    return r;
+  }
+
   updateRelationshipLabel(relationshipId: string, label: string): void {
     const r = this.diagram.relationships.find((x) => x.id === relationshipId);
     if (!r) return;
@@ -200,18 +262,36 @@ export class Store {
   applyLayout(layout: "grid" | "hierarchical" | "force"): void {
     this.pushUndo();
     const tables = this.diagram.tables;
-    if (layout === "grid") {
-      const cols = Math.ceil(Math.sqrt(tables.length)) || 1;
-      tables.forEach((t, i) => {
-        t.x = (i % cols) * 280;
-        t.y = Math.floor(i / cols) * 220;
-      });
-    } else if (layout === "hierarchical" || layout === "force") {
-      const cols = 3;
-      tables.forEach((t, i) => {
-        t.x = (i % cols) * 300;
-        t.y = Math.floor(i / cols) * 240;
-      });
+    const TABLE_WIDTH = 200;
+    const HEADER_HEIGHT = 28;
+    const ROW_HEIGHT = 22;
+    const MIN_LAYOUT_GAP = 48;
+    const stepX = TABLE_WIDTH + MIN_LAYOUT_GAP;
+    const tableHeight = (t: Table) =>
+      HEADER_HEIGHT + t.fields.length * ROW_HEIGHT;
+
+    const cols =
+      layout === "grid" ? Math.ceil(Math.sqrt(tables.length)) || 1 : 3;
+    const rowCount = Math.ceil(tables.length / cols) || 1;
+    const rowHeights: number[] = [];
+    for (let r = 0; r < rowCount; r++) {
+      const start = r * cols;
+      const end = Math.min(start + cols, tables.length);
+      const maxH =
+        end > start
+          ? Math.max(...tables.slice(start, end).map((t) => tableHeight(t)))
+          : HEADER_HEIGHT + ROW_HEIGHT;
+      rowHeights.push(maxH + MIN_LAYOUT_GAP);
+    }
+    let y = 0;
+    for (let r = 0; r < rowCount; r++) {
+      for (let c = 0; c < cols; c++) {
+        const i = r * cols + c;
+        if (i >= tables.length) break;
+        tables[i].x = c * stepX;
+        tables[i].y = y;
+      }
+      y += rowHeights[r];
     }
     this.notify();
   }

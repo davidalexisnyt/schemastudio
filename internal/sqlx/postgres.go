@@ -49,27 +49,41 @@ func (p *PostgresExporter) Export(d schema.Diagram) (string, error) {
 			if srcT == nil {
 				continue
 			}
-			var srcF, tgtF string
-			for _, f := range srcT.Fields {
-				if f.ID == r.SourceFieldID {
-					srcF = f.Name
-					break
-				}
+			srcFieldIDs := r.SourceFieldIDs
+			tgtFieldIDs := r.TargetFieldIDs
+			if len(srcFieldIDs) == 0 {
+				srcFieldIDs = []string{r.SourceFieldID}
 			}
-			for _, f := range t.Fields {
-				if f.ID == r.TargetFieldID {
-					tgtF = f.Name
-					break
-				}
+			if len(tgtFieldIDs) == 0 {
+				tgtFieldIDs = []string{r.TargetFieldID}
 			}
-			if srcF != "" && tgtF != "" {
-				b.WriteString(",\n  FOREIGN KEY (")
-				b.WriteString(quoteIdent(tgtF))
-				b.WriteString(") REFERENCES ")
-				b.WriteString(quoteIdent(srcT.Name))
-				b.WriteString(" (")
-				b.WriteString(quoteIdent(srcF))
-				b.WriteString(")")
+			n := len(srcFieldIDs)
+			if len(tgtFieldIDs) < n {
+				n = len(tgtFieldIDs)
+			}
+			for i := 0; i < n; i++ {
+				var srcF, tgtF string
+				for _, f := range srcT.Fields {
+					if f.ID == srcFieldIDs[i] {
+						srcF = f.Name
+						break
+					}
+				}
+				for _, f := range t.Fields {
+					if f.ID == tgtFieldIDs[i] {
+						tgtF = f.Name
+						break
+					}
+				}
+				if srcF != "" && tgtF != "" {
+					b.WriteString(",\n  FOREIGN KEY (")
+					b.WriteString(quoteIdent(tgtF))
+					b.WriteString(") REFERENCES ")
+					b.WriteString(quoteIdent(srcT.Name))
+					b.WriteString(" (")
+					b.WriteString(quoteIdent(srcF))
+					b.WriteString(")")
+				}
 			}
 		}
 		b.WriteString("\n);\n\n")
