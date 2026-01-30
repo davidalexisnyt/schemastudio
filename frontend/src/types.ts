@@ -70,6 +70,7 @@ export type Selection =
 
 export const FIELD_TYPES = [
   "text",
+  "string",
   "int",
   "bigint",
   "numeric",

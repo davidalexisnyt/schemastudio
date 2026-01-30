@@ -798,8 +798,9 @@ function promptBigQueryTarget(): Promise<{
     const panel = document.createElement("div");
     panel.className = "modal-panel modal-panel-bigquery-target";
     const headerDiv = document.createElement("div");
-    headerDiv.className = "modal-header";
+    headerDiv.className = "modal-bigquery-target-header";
     const title = document.createElement("h2");
+    title.className = "modal-title";
     title.textContent = "BigQuery target";
     headerDiv.appendChild(title);
     panel.appendChild(headerDiv);
@@ -852,8 +853,11 @@ function promptBigQueryTarget(): Promise<{
     contentDiv.appendChild(creationModeSelect);
     panel.appendChild(contentDiv);
     const footerDiv = document.createElement("div");
-    footerDiv.className = "modal-note-editor-footer";
+    footerDiv.className = "modal-bigquery-target-footer";
+    const footerButtons = document.createElement("div");
+    footerButtons.className = "modal-bigquery-target-footer-buttons";
     const okBtn = document.createElement("button");
+    okBtn.type = "button";
     okBtn.textContent = "OK";
     okBtn.onclick = () => {
       const project = projectInput.value.trim();
@@ -872,13 +876,15 @@ function promptBigQueryTarget(): Promise<{
       });
     };
     const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
     cancelBtn.textContent = "Cancel";
     cancelBtn.onclick = () => {
       overlay.remove();
       resolve(null);
     };
-    footerDiv.appendChild(okBtn);
-    footerDiv.appendChild(cancelBtn);
+    footerButtons.appendChild(okBtn);
+    footerButtons.appendChild(cancelBtn);
+    footerDiv.appendChild(footerButtons);
     panel.appendChild(footerDiv);
     overlay.appendChild(panel);
     document.body.appendChild(overlay);

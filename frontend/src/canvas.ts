@@ -174,11 +174,13 @@ function getSingleRelationshipPath(
 
   const midX = (src.x + tgt.x) / 2;
   const midY = (src.y + tgt.y) / 2;
-  const moreHorizontal = Math.abs(tgt.x - src.x) > Math.abs(tgt.y - src.y);
-  const c1x = moreHorizontal ? midX : src.x;
-  const c1y = moreHorizontal ? src.y : midY;
-  const c2x = moreHorizontal ? midX : tgt.x;
-  const c2y = moreHorizontal ? tgt.y : midY;
+  // Use edge sides so the line exits/enters at 90° (perpendicular to table edge).
+  const srcTangentHorizontal = srcSide === "left" || srcSide === "right";
+  const tgtTangentHorizontal = tgtSide === "left" || tgtSide === "right";
+  const c1x = srcTangentHorizontal ? midX : src.x;
+  const c1y = srcTangentHorizontal ? src.y : midY;
+  const c2x = tgtTangentHorizontal ? midX : tgt.x;
+  const c2y = tgtTangentHorizontal ? tgt.y : midY;
 
   const dx = tgt.x - c2x;
   const dy = tgt.y - c2y;
@@ -231,11 +233,13 @@ function getCompoundRelationshipPath(
 
   const midX = (src.x + tgt.x) / 2;
   const midY = (src.y + tgt.y) / 2;
-  const moreHorizontal = Math.abs(tgt.x - src.x) > Math.abs(tgt.y - src.y);
-  const c1x = moreHorizontal ? midX : src.x;
-  const c1y = moreHorizontal ? src.y : midY;
-  const c2x = moreHorizontal ? midX : tgt.x;
-  const c2y = moreHorizontal ? tgt.y : midY;
+  // Use edge sides so the line exits/enters at 90° (perpendicular to table edge).
+  const srcTangentHorizontal = srcSide === "left" || srcSide === "right";
+  const tgtTangentHorizontal = tgtSide === "left" || tgtSide === "right";
+  const c1x = srcTangentHorizontal ? midX : src.x;
+  const c1y = srcTangentHorizontal ? src.y : midY;
+  const c2x = tgtTangentHorizontal ? midX : tgt.x;
+  const c2y = tgtTangentHorizontal ? tgt.y : midY;
 
   const dx = tgt.x - c2x;
   const dy = tgt.y - c2y;

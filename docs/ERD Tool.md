@@ -270,7 +270,7 @@ The table object on the canvas is using a fixed width, but some tables have fiel
 
 - When zooming in and out the center of the zoom should be the position of the mouse pointer, not the top of the diagram.
 
-- Relationship lines sometimes end up connecting to tables at sharp angles. This causes arrowheads to be rendered sideways and partly embedded in the table box. Let's fix how relationship lines are drawn. Lines should always exit and enter tables at a 90 degree angle. This should also
+- Relationship lines sometimes end up connecting to tables at sharp angles. This causes arrowheads to be rendered sideways and partly embedded in the table box. Let's fix how relationship lines are drawn. Lines should always exit and enter tables at a 90 degree angle.
 
 
 
@@ -306,9 +306,11 @@ The table object on the canvas is using a fixed width, but some tables have fiel
 - Prompt the user for the target BigQuery project and dataset. Use these values when generating the fully qualified table names in the export.
 - Add a checkbox option called "Use Creation Mode" assosiated with a dropdown with options for "if not exists" and "create or replace". When unchecked, the dropdown is disabled. When checked, the dropdown is enabled and the user can select an option. Do not use use the creation mode when generating the DDL is the checkbox is unchecked. When checked, generate the DDL accordingly.
 
-In the BigQuery export options dialog, add
 
-\- 
+
+### BigQuery Export Fixes
+
+Style the BigQuery export options dialog consistently with the Table Editor dialog - specifically the header and footer styling.
 
 
 
