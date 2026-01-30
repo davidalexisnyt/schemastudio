@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"erd/internal/schema"
+	"schemastudio/internal/schema"
 )
 
 // Exporter generates DDL for a dialect.

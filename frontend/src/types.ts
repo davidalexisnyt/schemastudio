@@ -8,6 +8,8 @@ export interface Field {
   id: string;
   name: string;
   type: string;
+  nullable?: boolean;
+  primaryKey?: boolean;
 }
 
 export interface Table {
@@ -35,6 +37,7 @@ export interface Relationship {
 export const CARDINALITY_OPTIONS = [
   "1-to-1",
   "1-to-many",
+  "1-to-0/many",
   "many-to-1",
   "many-to-many",
   "0/1-to-0/1",
@@ -42,10 +45,20 @@ export const CARDINALITY_OPTIONS = [
   "many-to-0/many",
 ] as const;
 
+export interface Note {
+  id: string;
+  x: number;
+  y: number;
+  text: string;
+  width?: number;
+  height?: number;
+}
+
 export interface Diagram {
   version: number;
   tables: Table[];
   relationships: Relationship[];
+  notes?: Note[];
   viewport?: Viewport;
 }
 
@@ -56,13 +69,13 @@ export type Selection =
   | null;
 
 export const FIELD_TYPES = [
-  "TEXT",
-  "INT",
-  "BIGINT",
-  "NUMERIC",
-  "UUID",
-  "TIMESTAMP",
-  "DATE",
-  "BOOLEAN",
-  "OTHER",
+  "text",
+  "int",
+  "bigint",
+  "numeric",
+  "uuid",
+  "timestamp",
+  "date",
+  "boolean",
+  "other",
 ] as const;

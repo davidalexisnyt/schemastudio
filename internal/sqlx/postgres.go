@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"strings"
 
-	"erd/internal/schema"
+	"schemastudio/internal/schema"
 )
 
 // PostgresExporter generates PostgreSQL DDL with PRIMARY KEY and FOREIGN KEY.
@@ -19,7 +19,7 @@ func (p *PostgresExporter) Export(d schema.Diagram) (string, error) {
 		tableByID[d.Tables[i].ID] = &d.Tables[i]
 	}
 	for _, t := range d.Tables {
-		b.WriteString("CREATE TABLE ")
+		b.WriteString("create table ")
 		b.WriteString(quoteIdent(t.Name))
 		b.WriteString(" (\n")
 		var pk []string
@@ -31,13 +31,13 @@ func (p *PostgresExporter) Export(d schema.Diagram) (string, error) {
 			b.WriteString(quoteIdent(f.Name))
 			b.WriteString(" ")
 			b.WriteString(pgType(f.Type))
-			b.WriteString(" NOT NULL")
+			b.WriteString(" not null")
 			if strings.EqualFold(f.Name, "id") {
 				pk = append(pk, f.Name)
 			}
 		}
 		if len(pk) > 0 {
-			b.WriteString(",\n  PRIMARY KEY (")
+			b.WriteString(",\n  primary key (")
 			b.WriteString(quoteIdent(pk[0]))
 			b.WriteString(")")
 		}
@@ -76,9 +76,9 @@ func (p *PostgresExporter) Export(d schema.Diagram) (string, error) {
 					}
 				}
 				if srcF != "" && tgtF != "" {
-					b.WriteString(",\n  FOREIGN KEY (")
+					b.WriteString(",\n  foreign key (")
 					b.WriteString(quoteIdent(tgtF))
-					b.WriteString(") REFERENCES ")
+					b.WriteString(") references ")
 					b.WriteString(quoteIdent(srcT.Name))
 					b.WriteString(" (")
 					b.WriteString(quoteIdent(srcF))
@@ -92,6 +92,9 @@ func (p *PostgresExporter) Export(d schema.Diagram) (string, error) {
 }
 
 func quoteIdent(s string) string {
+	if !strings.Contains(s, " ") {
+		return s
+	}
 	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 }
 
@@ -99,31 +102,31 @@ func pgType(t string) string {
 	t = strings.ToUpper(strings.TrimSpace(t))
 	switch t {
 	case "INT", "INTEGER", "INT4":
-		return "INTEGER"
+		return "integer"
 	case "BIGINT", "INT8":
-		return "BIGINT"
+		return "bigint"
 	case "SMALLINT", "INT2":
-		return "SMALLINT"
+		return "smallint"
 	case "VARCHAR", "STRING", "TEXT":
-		return "TEXT"
+		return "text"
 	case "NUMERIC", "DECIMAL":
-		return "NUMERIC"
+		return "numeric"
 	case "FLOAT", "REAL":
-		return "REAL"
+		return "real"
 	case "DOUBLE":
-		return "DOUBLE PRECISION"
+		return "double precision"
 	case "BOOL", "BOOLEAN":
-		return "BOOLEAN"
+		return "boolean"
 	case "DATE":
-		return "DATE"
+		return "date"
 	case "TIMESTAMP", "DATETIME":
-		return "TIMESTAMP"
+		return "timestamp"
 	case "UUID":
-		return "UUID"
+		return "uuid"
 	default:
 		if t != "" {
-			return t
+			return strings.ToLower(t)
 		}
-		return "TEXT"
+		return "text"
 	}
 }

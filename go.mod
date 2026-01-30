@@ -1,4 +1,4 @@
-module erd
+module schemastudio
 
 go 1.25.6
 

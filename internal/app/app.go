@@ -7,9 +7,9 @@ import (
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
-	"erd/internal/importers"
-	"erd/internal/schema"
-	"erd/internal/sqlx"
+	"schemastudio/internal/importers"
+	"schemastudio/internal/schema"
+	"schemastudio/internal/sqlx"
 )
 
 // App is the Wails-bound application for file I/O and export/import.
@@ -73,6 +73,16 @@ func (a *App) ExportSQL(dialect string, jsonContent string) (string, error) {
 		return "", err
 	}
 	return sqlx.Export(dialect, d)
+}
+
+// ExportBigQuery returns BigQuery DDL with fully qualified table names (project.dataset.table).
+// creationMode is "if_not_exists", "create_or_replace", or "".
+func (a *App) ExportBigQuery(jsonContent string, project string, dataset string, creationMode string) (string, error) {
+	var d schema.Diagram
+	if err := json.Unmarshal([]byte(jsonContent), &d); err != nil {
+		return "", err
+	}
+	return sqlx.ExportBigQueryWithTarget(d, project, dataset, creationMode)
 }
 
 // ImportSQL parses DDL and returns diagram JSON.

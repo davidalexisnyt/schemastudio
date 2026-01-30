@@ -6,6 +6,18 @@
   --accent: #89b4fa;
   --border: #45475a;
   --danger: #f38ba8;
+  --table-header-bg: #181825;
+}
+
+:root[data-theme="light"] {
+  --bg: #eff1f5;
+  --surface: #ffffff;
+  --text: #4c4f69;
+  --muted: #6c6f85;
+  --accent: #1e66f5;
+  --border: #bcc0cc;
+  --danger: #d20f39;
+  --table-header-bg: #e6e9ef;
 }
 
 * {
@@ -129,6 +141,17 @@ body {
   rx: 6;
 }
 
+.table-header-rect {
+  fill: var(--table-header-bg);
+  stroke: none;
+  rx: 6;
+}
+
+.table-header-line {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
 .table-header {
   fill: var(--accent);
   font-weight: 600;
@@ -156,6 +179,46 @@ body {
   stroke: var(--muted);
 }
 
+.relationship-arrowhead {
+  fill: var(--border);
+  stroke: none;
+  pointer-events: stroke;
+}
+
+.relationship-arrowhead.selected {
+  fill: var(--accent);
+}
+
+.relationship-arrowhead:hover {
+  fill: var(--muted);
+}
+
+.canvas-note {
+  cursor: move;
+  pointer-events: all;
+}
+
+.canvas-note-rect {
+  fill: #fef08a;
+  stroke: #ca8a04;
+  stroke-width: 1;
+}
+
+.canvas-note-text {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: #1c1917;
+  background: transparent;
+  border: none;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  box-sizing: border-box;
+}
+
 .toast {
   position: fixed;
   bottom: 1rem;
@@ -167,6 +230,28 @@ body {
   border-radius: 8px;
   z-index: 1000;
   animation: fadeIn 0.2s ease;
+}
+
+.relationship-tooltip {
+  position: fixed;
+  padding: 0.5rem 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  z-index: 500;
+  font-size: 0.8125rem;
+  color: var(--text);
+  pointer-events: none;
+  max-width: 280px;
+}
+
+.relationship-tooltip div {
+  margin: 0.15rem 0;
+}
+
+.relationship-tooltip div:first-child {
+  margin-top: 0;
 }
 
 @keyframes fadeIn {
@@ -281,6 +366,77 @@ body {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
 }
 
+.modal-panel-table-editor {
+  display: flex;
+  flex-direction: column;
+  max-height: 85vh;
+  overflow: hidden;
+}
+
+.modal-panel-table-editor .modal-table-editor-header {
+  flex-shrink: 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  padding: 1rem 1.25rem;
+  margin: -1rem -1.25rem 0.25rem;
+}
+
+.modal-panel-table-editor .modal-table-editor-content {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  margin: 0 -0.25rem;
+  padding: 0 0.25rem;
+}
+
+.modal-panel-table-editor .modal-table-editor-footer {
+  flex-shrink: 0;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  padding: 1rem 1.25rem;
+  margin: 1rem -1.25rem -1rem;
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.modal-panel-table-editor .modal-table-editor-footer button {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.modal-fields-section {
+  margin-top: 1.25rem;
+}
+
+.modal-fields-section h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.modal-relationship-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.modal-relationship-card-header .rel-target-name {
+  margin-bottom: 0;
+}
+
+.modal-relationship-delete {
+  flex-shrink: 0;
+}
+
 .modal-title {
   margin: 0 0 1rem;
   font-size: 1.125rem;
@@ -297,6 +453,348 @@ body {
 
 .modal-fields-label {
   margin-top: 1rem;
+}
+
+.modal-fields-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 0.25rem;
+  font-size: 0.875rem;
+}
+
+.modal-fields-table th {
+  text-align: left;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.modal-fields-table td {
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.modal-fields-table tr:hover {
+  background: var(--bg);
+}
+
+.modal-fields-table .modal-field-drag {
+  cursor: grab;
+  color: var(--muted);
+  padding: 0 0.25rem;
+  user-select: none;
+}
+
+.modal-fields-table .modal-field-drag:active {
+  cursor: grabbing;
+}
+
+.modal-fields-table .modal-field-name-input {
+  width: 100%;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.875rem;
+}
+
+.modal-fields-table .modal-field-type-select {
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.875rem;
+  min-width: 90px;
+}
+
+.modal-field-delete-btn {
+  padding: 0.25rem;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-field-delete-btn:hover {
+  background: var(--border);
+}
+
+.modal-add-field-plus {
+  width: 100%;
+  padding: 0.35rem;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--accent);
+  font-size: 1.25rem;
+  cursor: pointer;
+  margin-bottom: 1rem;
+}
+
+.modal-add-field-plus:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.modal-relationships-section {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.modal-relationships-section h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.modal-relationship-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.modal-relationship-card .rel-target-name {
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  font-size: 0.875rem;
+}
+
+.modal-relationship-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+  margin-bottom: 0.5rem;
+}
+
+.modal-relationship-table th {
+  text-align: left;
+  padding: 0.25rem 0.4rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.modal-relationship-table td {
+  padding: 0.2rem 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-relationship-table select {
+  width: 100%;
+  padding: 0.2rem 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.8125rem;
+}
+
+/* Relationship editor dialog (3-section layout like Table Editor) */
+.modal-panel-relationship {
+  display: flex;
+  flex-direction: column;
+  max-height: 85vh;
+  overflow: hidden;
+}
+
+.modal-panel-relationship .modal-relationship-editor-header {
+  flex-shrink: 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  padding: 1rem 1.25rem;
+  margin: -1rem -1.25rem 0.25rem;
+}
+
+.modal-panel-relationship .modal-relationship-editor-content {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  margin: 0 -0.25rem;
+  padding: 0 0.25rem;
+}
+
+.modal-panel-relationship .modal-relationship-editor-footer {
+  flex-shrink: 0;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  padding: 1rem 1.25rem;
+  margin: 1rem -1.25rem -1rem;
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.modal-panel-relationship .modal-relationship-editor-footer button {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.modal-panel-note-editor {
+  display: flex;
+  flex-direction: column;
+  max-height: 85vh;
+  overflow: hidden;
+}
+
+.modal-panel-note-editor .modal-note-editor-content {
+  flex: 1;
+  min-height: 0;
+  margin: 0.5rem 0;
+}
+
+.modal-panel-note-editor .modal-note-editor-footer {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+  margin-top: 0.5rem;
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.modal-panel-note-editor .modal-note-editor-footer button {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.modal-bigquery-creation-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.75rem;
+  margin-bottom: 0.25rem;
+}
+
+.modal-label-inline {
+  display: inline;
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.modal-rel-fields-section {
+  margin-top: 1rem;
+}
+
+.modal-rel-fields-section h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.modal-rel-fields-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.modal-rel-fields-table th {
+  text-align: left;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.modal-rel-fields-table td {
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.modal-rel-fields-table select {
+  width: 100%;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.875rem;
+}
+
+.modal-rel-fields-table .modal-rel-delete-cell {
+  width: 40px;
+  text-align: center;
+}
+
+.modal-rel-add-field-plus {
+  width: 100%;
+  padding: 0.35rem;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--accent);
+  font-size: 1.25rem;
+  cursor: pointer;
+  margin-top: 0.25rem;
+}
+
+.modal-rel-add-field-plus:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.modal-add-rel-row {
+  padding: 0.2rem 0.5rem;
+  font-size: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--accent);
+  cursor: pointer;
+  margin-bottom: 0.5rem;
+}
+
+.modal-add-rel-row:hover {
+  background: var(--border);
+}
+
+.modal-add-relationship-block {
+  margin-top: 0.5rem;
+  padding: 0.75rem;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.modal-add-relationship-block select {
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.875rem;
+  margin-right: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.modal-add-relationship-block .create-rel-btn {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.875rem;
+  cursor: pointer;
 }
 
 .modal-input {

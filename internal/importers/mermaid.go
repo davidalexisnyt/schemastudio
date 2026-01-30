@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"strings"
 
-	"erd/internal/schema"
+	"schemastudio/internal/schema"
 )
 
 // ParseMermaid parses Mermaid erDiagram syntax and returns a Diagram.
@@ -52,7 +52,7 @@ func ParseMermaid(mermaid string) (schema.Diagram, error) {
 				d.Tables[currentTableIndex].Fields = append(d.Tables[currentTableIndex].Fields, schema.Field{
 					ID:   fID,
 					Name: name,
-					Type: typ,
+					Type: strings.ToLower(typ),
 				})
 			}
 		}

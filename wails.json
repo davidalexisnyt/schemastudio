@@ -1,13 +1,13 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "erd",
-  "outputfilename": "erd",
+  "name": "schemastudio",
+  "outputfilename": "schemastudio",
   "frontend:install": "npm install",
   "frontend:build": "npm run build",
   "frontend:dev:watcher": "npm run dev",
   "frontend:dev:serverUrl": "auto",
   "author": {
-    "name": "erd",
-    "email": ""
+    "name": "David Alexis",
+    "email": "david.alexis@nytimes.com"
   }
 }

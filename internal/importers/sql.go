@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"erd/internal/schema"
+	"schemastudio/internal/schema"
 )
 
 // ParseSQL parses DDL (PostgreSQL-style CREATE TABLE with optional PRIMARY KEY/FOREIGN KEY)
@@ -80,10 +80,10 @@ func ParseSQL(sql string) (schema.Diagram, error) {
 						}
 						if refFID != "" {
 							d.Relationships = append(d.Relationships, schema.Relationship{
-								ID:             idGen.rel(),
-								SourceTableID:  refT.ID,
-								SourceFieldID:  refFID,
-								TargetTableID:  tID,
+								ID:            idGen.rel(),
+								SourceTableID: refT.ID,
+								SourceFieldID: refFID,
+								TargetTableID: tID,
 								TargetFieldID: localFID,
 							})
 						}
@@ -99,7 +99,7 @@ func ParseSQL(sql string) (schema.Diagram, error) {
 			colName := strings.Trim(parts[0], `"`)
 			colType := parts[1]
 			fID := idGen.field()
-			t.Fields = append(t.Fields, schema.Field{ID: fID, Name: colName, Type: colType})
+			t.Fields = append(t.Fields, schema.Field{ID: fID, Name: colName, Type: strings.ToLower(colType)})
 			fieldByName[colName] = fID
 		}
 		d.Tables = append(d.Tables, t)

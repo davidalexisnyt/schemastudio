@@ -17,6 +17,12 @@ declare global {
             filterPattern: string,
           ): Promise<string>;
           ExportSQL(dialect: string, jsonContent: string): Promise<string>;
+          ExportBigQuery(
+            jsonContent: string,
+            project: string,
+            dataset: string,
+            creationMode: string,
+          ): Promise<string>;
           ImportSQL(sqlContent: string): Promise<string>;
           ImportMermaid(mermaidContent: string): Promise<string>;
           ExportMermaid(jsonContent: string): Promise<string>;
@@ -27,7 +33,8 @@ declare global {
 }
 
 const getApp = (): typeof window.go.app.App | undefined =>
-  (window as any).go?.app?.App ?? (window as any).go?.["erd/internal/app"]?.App;
+  (window as any).go?.app?.App ??
+  (window as any).go?.["schemastudio/internal/app"]?.App;
 
 export async function saveFile(path: string, content: string): Promise<void> {
   const app = getApp();
@@ -69,6 +76,17 @@ export async function exportSQL(
   const app = getApp();
   if (!app) throw new Error("Backend not available");
   return app.ExportSQL(dialect, jsonContent);
+}
+
+export async function exportBigQuery(
+  jsonContent: string,
+  project: string,
+  dataset: string,
+  creationMode: string,
+): Promise<string> {
+  const app = getApp();
+  if (!app) throw new Error("Backend not available");
+  return app.ExportBigQuery(jsonContent, project, dataset, creationMode);
 }
 
 export async function importSQL(sqlContent: string): Promise<string> {

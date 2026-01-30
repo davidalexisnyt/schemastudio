@@ -1,4 +1,4 @@
-# ERD Tool
+# ERD Tool - Schema Studio
 
 A desktop Entity Relationship Diagram editor built with **Wails** (Go backend + web frontend). Design database schemas visually, export to PostgreSQL or BigQuery DDL, Mermaid, JSON, PNG, or SVG.
 
@@ -40,9 +40,9 @@ A desktop Entity Relationship Diagram editor built with **Wails** (Go backend + 
 
 - **Production**: run the binary produced by `go build` or `wails build`:
   ```bash
-   ./erd
+   ./schemastudio
   ```
-  On Windows: `erd.exe`
+  On Windows: `schemastudio.exe`
 
 ## Features
 

@@ -21,9 +21,11 @@ type Table struct {
 
 // Field is a column in a table.
 type Field struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Type string `json:"type"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Type       string `json:"type"`
+	Nullable   bool   `json:"nullable,omitempty"`
+	PrimaryKey bool   `json:"primaryKey,omitempty"`
 }
 
 // Relationship links source field(s) to target field(s).

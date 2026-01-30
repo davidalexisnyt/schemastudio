@@ -1,4 +1,12 @@
-import type { Diagram, Table, Field, Relationship, Viewport } from "./types";
+import type {
+  Diagram,
+  Table,
+  Field,
+  Relationship,
+  Note,
+  Viewport,
+} from "./types";
+import { getTableWidth } from "./canvas";
 
 const MAX_UNDO = 50;
 
@@ -11,6 +19,7 @@ export function createEmptyDiagram(): Diagram {
     version: 1,
     tables: [],
     relationships: [],
+    notes: [],
     viewport: undefined,
   };
 }
@@ -20,11 +29,13 @@ export class Store {
   private undoStack: Diagram[] = [];
   private redoStack: Diagram[] = [];
   private listeners: Set<() => void> = new Set();
+  private dirty = false;
 
   constructor(initial?: Diagram) {
     this.diagram = initial
       ? JSON.parse(JSON.stringify(initial))
       : createEmptyDiagram();
+    if (!this.diagram.notes) this.diagram.notes = [];
   }
 
   getDiagram(): Diagram {
@@ -44,11 +55,28 @@ export class Store {
     this.undoStack.push(JSON.parse(JSON.stringify(this.diagram)));
     if (this.undoStack.length > MAX_UNDO) this.undoStack.shift();
     this.redoStack = [];
+    this.dirty = true;
+  }
+
+  isDirty(): boolean {
+    return this.dirty;
+  }
+
+  clearDirty(): void {
+    this.dirty = false;
+    this.notify();
   }
 
   setDiagram(d: Diagram): void {
     this.pushUndo();
-    this.diagram = JSON.parse(JSON.stringify(d));
+    const copy = JSON.parse(JSON.stringify(d)) as Diagram;
+    if (!copy.notes) copy.notes = [];
+    copy.tables.forEach((t) => {
+      t.fields.forEach((f) => {
+        f.type = f.type?.toLowerCase() ?? "text";
+      });
+    });
+    this.diagram = copy;
     this.notify();
   }
 
@@ -85,7 +113,7 @@ export class Store {
       name: "Table" + (this.diagram.tables.length + 1),
       x,
       y,
-      fields: [{ id: nextId("f"), name: "id", type: "INT" }],
+      fields: [{ id: nextId("f"), name: "id", type: "int" }],
     };
     this.diagram.tables.push(t);
     this.notify();
@@ -97,6 +125,7 @@ export class Store {
     if (!t) return;
     t.x = x;
     t.y = y;
+    this.dirty = true;
     this.notify();
   }
 
@@ -110,7 +139,13 @@ export class Store {
   replaceTableContent(
     tableId: string,
     name: string,
-    fields: { id?: string; name: string; type: string }[],
+    fields: {
+      id?: string;
+      name: string;
+      type: string;
+      nullable?: boolean;
+      primaryKey?: boolean;
+    }[],
   ): void {
     this.pushUndo();
     const t = this.diagram.tables.find((x) => x.id === tableId);
@@ -119,16 +154,21 @@ export class Store {
     const existingIds = new Set(t.fields.map((f) => f.id));
     const newFields: Field[] = [];
     for (const row of fields) {
+      const typeNorm = row.type.trim().toLowerCase() || "text";
       if (row.id && existingIds.has(row.id)) {
         const f = t.fields.find((x) => x.id === row.id)!;
         f.name = row.name;
-        f.type = row.type;
+        f.type = typeNorm;
+        f.nullable = row.nullable ?? false;
+        f.primaryKey = row.primaryKey ?? false;
         newFields.push(f);
       } else {
         newFields.push({
           id: row.id ?? nextId("f"),
           name: row.name,
-          type: row.type,
+          type: typeNorm,
+          nullable: row.nullable ?? false,
+          primaryKey: row.primaryKey ?? false,
         });
       }
     }
@@ -151,18 +191,42 @@ export class Store {
     this.notify();
   }
 
-  addField(tableId: string, name?: string, type?: string): Field {
+  addField(
+    tableId: string,
+    name?: string,
+    type?: string,
+    nullable?: boolean,
+    primaryKey?: boolean,
+  ): Field {
     this.pushUndo();
     const t = this.diagram.tables.find((x) => x.id === tableId);
     if (!t) throw new Error("Table not found");
     const f: Field = {
       id: nextId("f"),
       name: name ?? "field",
-      type: type ?? "TEXT",
+      type: (type ?? "text").toLowerCase(),
+      nullable: nullable ?? false,
+      primaryKey: primaryKey ?? false,
     };
     t.fields.push(f);
     this.notify();
     return f;
+  }
+
+  reorderFields(tableId: string, fromIndex: number, toIndex: number): void {
+    this.pushUndo();
+    const t = this.diagram.tables.find((x) => x.id === tableId);
+    if (
+      !t ||
+      fromIndex < 0 ||
+      toIndex < 0 ||
+      fromIndex >= t.fields.length ||
+      toIndex >= t.fields.length
+    )
+      return;
+    const [removed] = t.fields.splice(fromIndex, 1);
+    t.fields.splice(toIndex, 0, removed);
+    this.notify();
   }
 
   updateField(
@@ -170,13 +234,17 @@ export class Store {
     fieldId: string,
     name: string,
     type: string,
+    nullable?: boolean,
+    primaryKey?: boolean,
   ): void {
     const t = this.diagram.tables.find((x) => x.id === tableId);
     if (!t) return;
     const f = t.fields.find((x) => x.id === fieldId);
     if (!f) return;
     f.name = name;
-    f.type = type;
+    f.type = type.toLowerCase();
+    if (nullable !== undefined) f.nullable = nullable;
+    if (primaryKey !== undefined) f.primaryKey = primaryKey;
     this.notify();
   }
 
@@ -246,6 +314,27 @@ export class Store {
     this.notify();
   }
 
+  updateRelationshipMeta(
+    relationshipId: string,
+    sourceFieldIds: string[],
+    targetFieldIds: string[],
+    name?: string,
+    note?: string,
+    cardinality?: string,
+  ): void {
+    this.pushUndo();
+    const r = this.diagram.relationships.find((x) => x.id === relationshipId);
+    if (!r) return;
+    r.sourceFieldIds = sourceFieldIds;
+    r.targetFieldIds = targetFieldIds;
+    r.sourceFieldId = sourceFieldIds[0] ?? r.sourceFieldId;
+    r.targetFieldId = targetFieldIds[0] ?? r.targetFieldId;
+    r.name = name ?? "";
+    r.note = note ?? "";
+    r.cardinality = cardinality ?? "";
+    this.notify();
+  }
+
   deleteRelationship(relationshipId: string): void {
     this.pushUndo();
     this.diagram.relationships = this.diagram.relationships.filter(
@@ -259,14 +348,50 @@ export class Store {
     this.notify();
   }
 
+  addNote(x: number, y: number, text: string): Note {
+    this.pushUndo();
+    const n: Note = {
+      id: nextId("n"),
+      x,
+      y,
+      text: text ?? "",
+    };
+    if (!this.diagram.notes) this.diagram.notes = [];
+    this.diagram.notes.push(n);
+    this.notify();
+    return n;
+  }
+
+  updateNote(noteId: string, text: string): void {
+    const n = this.diagram.notes?.find((x) => x.id === noteId);
+    if (!n) return;
+    this.pushUndo();
+    n.text = text;
+    this.notify();
+  }
+
+  updateNotePosition(noteId: string, x: number, y: number): void {
+    const n = this.diagram.notes?.find((x) => x.id === noteId);
+    if (!n) return;
+    n.x = x;
+    n.y = y;
+    this.dirty = true;
+    this.notify();
+  }
+
+  deleteNote(noteId: string): void {
+    this.pushUndo();
+    if (!this.diagram.notes) return;
+    this.diagram.notes = this.diagram.notes.filter((n) => n.id !== noteId);
+    this.notify();
+  }
+
   applyLayout(layout: "grid" | "hierarchical" | "force"): void {
     this.pushUndo();
     const tables = this.diagram.tables;
-    const TABLE_WIDTH = 200;
     const HEADER_HEIGHT = 28;
     const ROW_HEIGHT = 22;
     const MIN_LAYOUT_GAP = 48;
-    const stepX = TABLE_WIDTH + MIN_LAYOUT_GAP;
     const tableHeight = (t: Table) =>
       HEADER_HEIGHT + t.fields.length * ROW_HEIGHT;
 
@@ -285,11 +410,13 @@ export class Store {
     }
     let y = 0;
     for (let r = 0; r < rowCount; r++) {
+      let x = 0;
       for (let c = 0; c < cols; c++) {
         const i = r * cols + c;
         if (i >= tables.length) break;
-        tables[i].x = c * stepX;
+        tables[i].x = x;
         tables[i].y = y;
+        x += getTableWidth(tables[i]) + MIN_LAYOUT_GAP;
       }
       y += rowHeights[r];
     }
