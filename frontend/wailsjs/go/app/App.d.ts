@@ -17,4 +17,6 @@ export function OpenFileDialog(arg1:string,arg2:string,arg3:string):Promise<stri
 
 export function Save(arg1:string,arg2:string):Promise<void>;
 
+export function SaveBase64(arg1:string,arg2:string):Promise<void>;
+
 export function SaveFileDialog(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;

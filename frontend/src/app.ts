@@ -644,15 +644,7 @@ function setupToolbar(): void {
   const exportContent = document.createElement("div");
   exportContent.className = "dropdown-content";
   const exportItems = [
-    [
-      "JSON",
-      async () =>
-        download(
-          "schema.json",
-          JSON.stringify(store.getDiagram(), null, 2),
-          "application/json",
-        ),
-    ],
+    ["JSON", async () => exportJSON()],
     ["SQL (PostgreSQL)", async () => exportSQL("postgres")],
     ["SQL (BigQuery)", async () => exportBigQuerySQL()],
     ["Mermaid", async () => exportMermaid()],
@@ -754,6 +746,25 @@ function download(filename: string, content: string, mime: string): void {
   a.href = "data:" + mime + "," + encodeURIComponent(content);
   a.download = filename;
   a.click();
+}
+
+async function exportJSON(): Promise<void> {
+  const content = JSON.stringify(store.getDiagram(), null, 2);
+  if (bridge.isBackendAvailable()) {
+    const path = await bridge.saveFileDialog(
+      "Export JSON",
+      "schema.json",
+      "JSON",
+      "*.json",
+    );
+    if (path) {
+      await bridge.saveFile(path, content);
+      showToast("Exported");
+    }
+  } else {
+    download("schema.json", content, "application/json");
+    showToast("Exported JSON");
+  }
 }
 
 async function exportSQL(dialect: string): Promise<void> {
@@ -899,8 +910,16 @@ async function exportBigQuerySQL(): Promise<void> {
 async function exportMermaid(): Promise<void> {
   if (!bridge.isBackendAvailable()) throw new Error("Backend not available");
   const mm = await bridge.exportMermaid(JSON.stringify(store.getDiagram()));
-  download("schema.mmd", mm, "text/plain");
-  showToast("Exported Mermaid");
+  const path = await bridge.saveFileDialog(
+    "Export Mermaid",
+    "schema.mmd",
+    "Mermaid",
+    "*.mmd",
+  );
+  if (path) {
+    await bridge.saveFile(path, mm);
+    showToast("Exported");
+  }
 }
 
 const PNG_EXPORT_SCALE = 3; // higher resolution (e.g. 3x logical size)
@@ -919,13 +938,23 @@ const EXPORT_CANVAS_STYLES = `
   .relationship-arrowhead.selected { fill: #1e66f5 !important; }
 `;
 
-function exportPNG(): void {
+async function exportPNG(): Promise<void> {
   const svgEl = container.querySelector(".canvas-svg") as SVGElement;
   if (!svgEl) return;
   const d = store.getDiagram();
   if (d.tables.length === 0) {
     showToast("No tables to export");
     return;
+  }
+  let savePath: string | null = null;
+  if (bridge.isBackendAvailable()) {
+    savePath = await bridge.saveFileDialog(
+      "Export PNG",
+      "schema.png",
+      "PNG",
+      "*.png",
+    );
+    if (!savePath) return;
   }
   let minX = Infinity;
   let minY = Infinity;
@@ -959,15 +988,23 @@ function exportPNG(): void {
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d")!;
   const img = new Image();
-  img.onload = () => {
+  const pathToSave = savePath;
+  img.onload = async () => {
     canvas.width = img.width;
     canvas.height = img.height;
     ctx.drawImage(img, 0, 0);
-    const a = document.createElement("a");
-    a.href = canvas.toDataURL("image/png");
-    a.download = "schema.png";
-    a.click();
-    showToast("Exported PNG");
+    if (pathToSave) {
+      const dataUrl = canvas.toDataURL("image/png");
+      const base64 = dataUrl.replace(/^data:image\/png;base64,/, "");
+      await bridge.saveFileBase64(pathToSave, base64);
+      showToast("Exported");
+    } else {
+      const a = document.createElement("a");
+      a.href = canvas.toDataURL("image/png");
+      a.download = "schema.png";
+      a.click();
+      showToast("Exported PNG");
+    }
   };
   img.src =
     "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(svgData)));
@@ -975,7 +1012,7 @@ function exportPNG(): void {
 
 const SVG_EXPORT_PADDING = 40;
 
-function exportSVG(): void {
+async function exportSVG(): Promise<void> {
   const svgEl = container.querySelector(".canvas-svg") as SVGElement;
   if (!svgEl) return;
   const d = store.getDiagram();
@@ -983,37 +1020,90 @@ function exportSVG(): void {
     showToast("No tables to export");
     return;
   }
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (const t of d.tables) {
-    const w = getTableWidth(t);
-    const h = HEADER_HEIGHT + t.fields.length * ROW_HEIGHT;
-    minX = Math.min(minX, t.x);
-    minY = Math.min(minY, t.y);
-    maxX = Math.max(maxX, t.x + w);
-    maxY = Math.max(maxY, t.y + h);
-  }
-  const pad = SVG_EXPORT_PADDING;
-  const width = maxX - minX + 2 * pad;
-  const height = maxY - minY + 2 * pad;
+  if (bridge.isBackendAvailable()) {
+    const path = await bridge.saveFileDialog(
+      "Export SVG",
+      "schema.svg",
+      "SVG",
+      "*.svg",
+    );
+    if (!path) return;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const t of d.tables) {
+      const w = getTableWidth(t);
+      const h = HEADER_HEIGHT + t.fields.length * ROW_HEIGHT;
+      minX = Math.min(minX, t.x);
+      minY = Math.min(minY, t.y);
+      maxX = Math.max(maxX, t.x + w);
+      maxY = Math.max(maxY, t.y + h);
+    }
+    const pad = SVG_EXPORT_PADDING;
+    const width = maxX - minX + 2 * pad;
+    const height = maxY - minY + 2 * pad;
 
-  const clone = svgEl.cloneNode(true) as SVGElement;
-  const style = document.createElementNS("http://www.w3.org/2000/svg", "style");
-  style.textContent = EXPORT_CANVAS_STYLES;
-  clone.insertBefore(style, clone.firstChild);
-  const group = clone.querySelector("g") as SVGGElement;
-  if (group) {
-    group.setAttribute("transform", `translate(${pad - minX}, ${pad - minY})`);
-  }
-  clone.setAttribute("viewBox", `0 0 ${width} ${height}`);
-  clone.setAttribute("width", String(width));
-  clone.setAttribute("height", String(height));
+    const clone = svgEl.cloneNode(true) as SVGElement;
+    const style = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "style",
+    );
+    style.textContent = EXPORT_CANVAS_STYLES;
+    clone.insertBefore(style, clone.firstChild);
+    const group = clone.querySelector("g") as SVGGElement;
+    if (group) {
+      group.setAttribute(
+        "transform",
+        `translate(${pad - minX}, ${pad - minY})`,
+      );
+    }
+    clone.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    clone.setAttribute("width", String(width));
+    clone.setAttribute("height", String(height));
 
-  const data = new XMLSerializer().serializeToString(clone);
-  download("schema.svg", data, "image/svg+xml");
-  showToast("Exported SVG");
+    const data = new XMLSerializer().serializeToString(clone);
+    await bridge.saveFile(path, data);
+    showToast("Exported");
+  } else {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const t of d.tables) {
+      const w = getTableWidth(t);
+      const h = HEADER_HEIGHT + t.fields.length * ROW_HEIGHT;
+      minX = Math.min(minX, t.x);
+      minY = Math.min(minY, t.y);
+      maxX = Math.max(maxX, t.x + w);
+      maxY = Math.max(maxY, t.y + h);
+    }
+    const pad = SVG_EXPORT_PADDING;
+    const width = maxX - minX + 2 * pad;
+    const height = maxY - minY + 2 * pad;
+
+    const clone = svgEl.cloneNode(true) as SVGElement;
+    const style = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "style",
+    );
+    style.textContent = EXPORT_CANVAS_STYLES;
+    clone.insertBefore(style, clone.firstChild);
+    const group = clone.querySelector("g") as SVGGElement;
+    if (group) {
+      group.setAttribute(
+        "transform",
+        `translate(${pad - minX}, ${pad - minY})`,
+      );
+    }
+    clone.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    clone.setAttribute("width", String(width));
+    clone.setAttribute("height", String(height));
+
+    const data = new XMLSerializer().serializeToString(clone);
+    download("schema.svg", data, "image/svg+xml");
+    showToast("Exported SVG");
+  }
 }
 
 async function openAndImportJSON(): Promise<void> {

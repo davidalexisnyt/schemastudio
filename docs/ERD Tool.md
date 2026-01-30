@@ -270,6 +270,8 @@ The table object on the canvas is using a fixed width, but some tables have fiel
 
 - When zooming in and out the center of the zoom should be the position of the mouse pointer, not the top of the diagram.
 
+- Relationship lines sometimes end up connecting to tables at sharp angles. This causes arrowheads to be rendered sideways and partly embedded in the table box. Let's fix how relationship lines are drawn. Lines should always exit and enter tables at a 90 degree angle. This should also
+
 
 
 ---

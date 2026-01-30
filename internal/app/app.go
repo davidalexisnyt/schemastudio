@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 
@@ -30,6 +31,15 @@ func (a *App) Startup(ctx context.Context) {
 // Save writes the diagram JSON to the given path.
 func (a *App) Save(path string, content string) error {
 	return os.WriteFile(path, []byte(content), 0644)
+}
+
+// SaveBase64 decodes base64 data and writes it to the given path (e.g. for PNG export).
+func (a *App) SaveBase64(path string, base64Data string) error {
+	decoded, err := base64.StdEncoding.DecodeString(base64Data)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, decoded, 0644)
 }
 
 // Load reads the diagram JSON from the given path.

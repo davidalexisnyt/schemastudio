@@ -4,6 +4,7 @@ declare global {
       app?: {
         App?: {
           Save(path: string, content: string): Promise<void>;
+          SaveBase64(path: string, base64Data: string): Promise<void>;
           Load(path: string): Promise<string>;
           SaveFileDialog(
             title: string,
@@ -40,6 +41,15 @@ export async function saveFile(path: string, content: string): Promise<void> {
   const app = getApp();
   if (!app) throw new Error("Backend not available");
   await app.Save(path, content);
+}
+
+export async function saveFileBase64(
+  path: string,
+  base64Data: string,
+): Promise<void> {
+  const app = getApp();
+  if (!app) throw new Error("Backend not available");
+  await app.SaveBase64(path, base64Data);
 }
 
 export async function loadFile(path: string): Promise<string> {
