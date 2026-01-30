@@ -95,6 +95,15 @@ func (a *App) ExportBigQuery(jsonContent string, project string, dataset string,
 	return sqlx.ExportBigQueryWithTarget(d, project, dataset, creationMode)
 }
 
+// ExportPostgres returns PostgreSQL DDL. If schemaName is non-empty, table names are schema-qualified (e.g. "myschema"."mytable").
+func (a *App) ExportPostgres(jsonContent string, schemaName string) (string, error) {
+	var d schema.Diagram
+	if err := json.Unmarshal([]byte(jsonContent), &d); err != nil {
+		return "", err
+	}
+	return sqlx.ExportPostgres(d, schemaName)
+}
+
 // ImportSQL parses DDL and returns diagram JSON.
 func (a *App) ImportSQL(sqlContent string) (string, error) {
 	d, err := importers.ParseSQL(sqlContent)

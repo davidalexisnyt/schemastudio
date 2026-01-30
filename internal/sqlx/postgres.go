@@ -13,14 +13,21 @@ type PostgresExporter struct{}
 func (p *PostgresExporter) Dialect() string { return "postgres" }
 
 func (p *PostgresExporter) Export(d schema.Diagram) (string, error) {
+	return ExportPostgresWithSchema(d, "")
+}
+
+// ExportPostgresWithSchema returns PostgreSQL DDL. If schemaName is non-empty,
+// table names are qualified as "schema"."table".
+func ExportPostgresWithSchema(d schema.Diagram, schemaName string) (string, error) {
 	var b bytes.Buffer
 	tableByID := make(map[string]*schema.Table)
 	for i := range d.Tables {
 		tableByID[d.Tables[i].ID] = &d.Tables[i]
 	}
 	for _, t := range d.Tables {
+		tblName := qualifiedTableName(schemaName, t.Name)
 		b.WriteString("create table ")
-		b.WriteString(quoteIdent(t.Name))
+		b.WriteString(tblName)
 		b.WriteString(" (\n")
 		var pk []string
 		for i, f := range t.Fields {
@@ -76,10 +83,11 @@ func (p *PostgresExporter) Export(d schema.Diagram) (string, error) {
 					}
 				}
 				if srcF != "" && tgtF != "" {
+					srcTblName := qualifiedTableName(schemaName, srcT.Name)
 					b.WriteString(",\n  foreign key (")
 					b.WriteString(quoteIdent(tgtF))
 					b.WriteString(") references ")
-					b.WriteString(quoteIdent(srcT.Name))
+					b.WriteString(srcTblName)
 					b.WriteString(" (")
 					b.WriteString(quoteIdent(srcF))
 					b.WriteString(")")
@@ -96,6 +104,14 @@ func quoteIdent(s string) string {
 		return s
 	}
 	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+}
+
+func qualifiedTableName(schemaName, tableName string) string {
+	q := quoteIdent(tableName)
+	if schemaName == "" {
+		return q
+	}
+	return quoteIdent(schemaName) + "." + q
 }
 
 func pgType(t string) string {

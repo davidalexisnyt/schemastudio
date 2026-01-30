@@ -308,11 +308,32 @@ The table object on the canvas is using a fixed width, but some tables have fiel
 
 
 
+## Postgres Export
+
+- Add a PostgreSQL Export dialog that looks like the BigQuery export dialog. In the content area of the dialog add a toggle button for "Specify Schema". When the toggle is on, a text entry field with the label "Schema" should be displayed. When the toggle is off, the field should be hidden.
+- When generating the exported DDL, generate the table names with the specified schema prefix if the "Specify Schema" toggle is on.
+
+
+
 ### BigQuery Export Fixes
 
 Style the BigQuery export options dialog consistently with the Table Editor dialog - specifically the header and footer styling.
 
 
+
+# Misc Fixes
+
+- Keyboard shortcuts
+  - Ctrl+Z works for undo, but Ctrol-Y does not seem to trigger the redo. Please implmenent this key mapping.
+  - Ctrl-S should trigger the Save action
+  - Ctrl-T should create a new table.
+  - Ctrl-O should trigger the Open File operation
+  - These keyboard shortcuts should only be active on the canvas. They should be disabled when the user is in a popup dialog (table editor, relationship editor, export options dialog, etc).
+- Sticky Notes
+  - Make the sticky note resizeable on the canvas.
+- Menu/button bar
+  - Remove the Add Table button. We can add tables with Ctrl-T or from the canvas context menu.
+- On both the Postgres and BigQuery export options dialogs, change the checkbox to a toggle button.
 
 
 

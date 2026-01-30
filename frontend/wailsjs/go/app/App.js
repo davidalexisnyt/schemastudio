@@ -10,6 +10,10 @@ export function ExportMermaid(arg1) {
   return window['go']['app']['App']['ExportMermaid'](arg1);
 }
 
+export function ExportPostgres(arg1, arg2) {
+  return window['go']['app']['App']['ExportPostgres'](arg1, arg2);
+}
+
 export function ExportSQL(arg1, arg2) {
   return window['go']['app']['App']['ExportSQL'](arg1, arg2);
 }

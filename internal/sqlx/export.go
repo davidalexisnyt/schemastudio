@@ -32,6 +32,11 @@ func Export(dialect string, d schema.Diagram) (string, error) {
 	return e.Export(d)
 }
 
+// ExportPostgres returns PostgreSQL DDL. If schema is non-empty, table names are schema-qualified.
+func ExportPostgres(d schema.Diagram, schema string) (string, error) {
+	return ExportPostgresWithSchema(d, schema)
+}
+
 // Dialects returns the list of registered dialect names.
 func Dialects() []string {
 	names := make([]string, 0, len(registry))

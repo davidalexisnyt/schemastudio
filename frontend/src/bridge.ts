@@ -18,6 +18,7 @@ declare global {
             filterPattern: string,
           ): Promise<string>;
           ExportSQL(dialect: string, jsonContent: string): Promise<string>;
+          ExportPostgres(jsonContent: string, schema: string): Promise<string>;
           ExportBigQuery(
             jsonContent: string,
             project: string,
@@ -86,6 +87,15 @@ export async function exportSQL(
   const app = getApp();
   if (!app) throw new Error("Backend not available");
   return app.ExportSQL(dialect, jsonContent);
+}
+
+export async function exportPostgres(
+  jsonContent: string,
+  schema: string,
+): Promise<string> {
+  const app = getApp();
+  if (!app) throw new Error("Backend not available");
+  return app.ExportPostgres(jsonContent, schema);
 }
 
 export async function exportBigQuery(

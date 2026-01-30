@@ -379,6 +379,15 @@ export class Store {
     this.notify();
   }
 
+  updateNoteSize(noteId: string, width: number, height: number): void {
+    const n = this.diagram.notes?.find((x) => x.id === noteId);
+    if (!n) return;
+    n.width = width;
+    n.height = height;
+    this.dirty = true;
+    this.notify();
+  }
+
   deleteNote(noteId: string): void {
     this.pushUndo();
     if (!this.diagram.notes) return;

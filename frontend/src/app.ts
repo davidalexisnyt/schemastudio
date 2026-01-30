@@ -21,6 +21,7 @@ let dragTableId: string | null = null;
 let dragStart = { x: 0, y: 0 };
 let dragNoteId: string | null = null;
 let dragNoteStart = { x: 0, y: 0 };
+let resizeNoteId: string | null = null;
 let connectSource: { tableId: string; fieldId: string } | null = null;
 let connectLine: { x: number; y: number } | null = null;
 let container: HTMLElement;
@@ -31,6 +32,9 @@ let relationshipsLayer: SVGGElement;
 let notesLayer: SVGGElement;
 const NOTE_DEFAULT_WIDTH = 200;
 const NOTE_DEFAULT_HEIGHT = 140;
+const MIN_NOTE_WIDTH = 80;
+const MIN_NOTE_HEIGHT = 60;
+const NOTE_RESIZE_HANDLE_SIZE = 14;
 const EDGE_SCROLL_ZONE = 48;
 const EDGE_SCROLL_SPEED = 8;
 let tempLine: SVGPathElement | null = null;
@@ -54,7 +58,7 @@ function appendStatus(message: string, type: "info" | "error" = "info"): void {
 
 function emitSelection(): void {
   container.dispatchEvent(
-    new CustomEvent("erd-selection", { detail: selection }),
+    new CustomEvent("erd-selection", { detail: selection })
   );
 }
 
@@ -154,7 +158,7 @@ function render(): void {
     pathDataList.forEach((item) => {
       const path = document.createElementNS(
         "http://www.w3.org/2000/svg",
-        "path",
+        "path"
       );
       path.setAttribute("d", item.pathD);
       path.setAttribute("class", pathClass);
@@ -173,7 +177,7 @@ function render(): void {
           r.sourceTableId,
           r.sourceFieldId,
           r.targetTableId,
-          r.id,
+          r.id
         );
       });
       path.addEventListener("mouseenter", showRelTooltip);
@@ -181,7 +185,7 @@ function render(): void {
       relationshipsLayer.appendChild(path);
       const arrow = document.createElementNS(
         "http://www.w3.org/2000/svg",
-        "path",
+        "path"
       );
       arrow.setAttribute("d", item.arrowheadPathD);
       arrow.setAttribute("class", pathClass + " relationship-arrowhead");
@@ -196,7 +200,7 @@ function render(): void {
           r.sourceTableId,
           r.sourceFieldId,
           r.targetTableId,
-          r.id,
+          r.id
         );
       });
       arrow.addEventListener("mouseenter", showRelTooltip);
@@ -220,7 +224,7 @@ function render(): void {
     noteG.appendChild(rect);
     const fo = document.createElementNS(
       "http://www.w3.org/2000/svg",
-      "foreignObject",
+      "foreignObject"
     );
     fo.setAttribute("width", String(w));
     fo.setAttribute("height", String(h));
@@ -231,8 +235,26 @@ function render(): void {
     div.textContent = note.text || "Double-click to edit";
     fo.appendChild(div);
     noteG.appendChild(fo);
+    const resizeHandle = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "rect"
+    );
+    resizeHandle.setAttribute("x", String(w - NOTE_RESIZE_HANDLE_SIZE));
+    resizeHandle.setAttribute("y", String(h - NOTE_RESIZE_HANDLE_SIZE));
+    resizeHandle.setAttribute("width", String(NOTE_RESIZE_HANDLE_SIZE));
+    resizeHandle.setAttribute("height", String(NOTE_RESIZE_HANDLE_SIZE));
+    resizeHandle.setAttribute("class", "canvas-note-resize-handle");
+    resizeHandle.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      e.preventDefault();
+      resizeNoteId = note.id;
+      setupDocumentDragListeners();
+    });
+    noteG.appendChild(resizeHandle);
     noteG.addEventListener("mousedown", (e) => {
       if (e.button !== 0) return;
+      if ((e.target as Element).closest(".canvas-note-resize-handle")) return;
       e.stopPropagation();
       const pt = screenToDiagram(e.clientX, e.clientY);
       dragNoteId = note.id;
@@ -253,7 +275,7 @@ function render(): void {
       "table-group" +
         (selection?.type === "table" && selection.tableId === t.id
           ? " selected"
-          : ""),
+          : "")
     );
     g.setAttribute("transform", `translate(${t.x}, ${t.y})`);
     g.setAttribute("data-table-id", t.id);
@@ -269,7 +291,7 @@ function render(): void {
 
     const headerRect = document.createElementNS(
       "http://www.w3.org/2000/svg",
-      "rect",
+      "rect"
     );
     headerRect.setAttribute("width", String(w));
     headerRect.setAttribute("height", String(HEADER_HEIGHT));
@@ -279,7 +301,7 @@ function render(): void {
 
     const headerLine = document.createElementNS(
       "http://www.w3.org/2000/svg",
-      "line",
+      "line"
     );
     headerLine.setAttribute("x1", "0");
     headerLine.setAttribute("y1", String(HEADER_HEIGHT));
@@ -290,7 +312,7 @@ function render(): void {
 
     const header = document.createElementNS(
       "http://www.w3.org/2000/svg",
-      "text",
+      "text"
     );
     header.setAttribute("x", "10");
     header.setAttribute("y", String(HEADER_HEIGHT - 8));
@@ -310,7 +332,7 @@ function render(): void {
           : "");
       const rowGroup = document.createElementNS(
         "http://www.w3.org/2000/svg",
-        "g",
+        "g"
       );
       rowGroup.dataset.tableId = t.id;
       rowGroup.dataset.fieldId = f.id;
@@ -318,7 +340,7 @@ function render(): void {
 
       const nameText = document.createElementNS(
         "http://www.w3.org/2000/svg",
-        "text",
+        "text"
       );
       nameText.setAttribute("x", "10");
       nameText.setAttribute("y", String(rowY));
@@ -327,7 +349,7 @@ function render(): void {
 
       const typeText = document.createElementNS(
         "http://www.w3.org/2000/svg",
-        "text",
+        "text"
       );
       typeText.setAttribute("x", String(typeColumnStart));
       typeText.setAttribute("y", String(rowY));
@@ -343,7 +365,7 @@ function render(): void {
         connectSource = { tableId: t.id, fieldId: f.id };
         tempLine = document.createElementNS(
           "http://www.w3.org/2000/svg",
-          "path",
+          "path"
         );
         tempLine.setAttribute("class", "relationship-path");
         tempLine.setAttribute("d", "M 0 0 L 0 0");
@@ -384,12 +406,12 @@ function render(): void {
     const srcT = d.tables.find((t) => t.id === connectSource!.tableId);
     if (srcT) {
       const srcFi = srcT.fields.findIndex(
-        (f) => f.id === connectSource!.fieldId,
+        (f) => f.id === connectSource!.fieldId
       );
       const src = getFieldAnchor(srcT, srcFi >= 0 ? srcFi : 0, "right");
       tempLine.setAttribute(
         "d",
-        `M ${src.x} ${src.y} L ${connectLine.x} ${connectLine.y}`,
+        `M ${src.x} ${src.y} L ${connectLine.x} ${connectLine.y}`
       );
     }
   }
@@ -398,7 +420,7 @@ function render(): void {
 function updateTransform(): void {
   transformGroup.setAttribute(
     "transform",
-    `translate(${pan.x}, ${pan.y}) scale(${zoom})`,
+    `translate(${pan.x}, ${pan.y}) scale(${zoom})`
   );
 }
 
@@ -408,7 +430,7 @@ function onDocumentDragMove(e: MouseEvent): void {
     store.updateTablePosition(
       dragTableId,
       pt.x - dragStart.x,
-      pt.y - dragStart.y,
+      pt.y - dragStart.y
     );
     const r = svg.getBoundingClientRect();
     let dx = 0;
@@ -428,22 +450,34 @@ function onDocumentDragMove(e: MouseEvent): void {
     }
     return;
   }
+  if (resizeNoteId) {
+    const pt = screenToDiagram(e.clientX, e.clientY);
+    const note = store.getDiagram().notes?.find((n) => n.id === resizeNoteId);
+    if (note) {
+      const newW = Math.max(MIN_NOTE_WIDTH, pt.x - note.x);
+      const newH = Math.max(MIN_NOTE_HEIGHT, pt.y - note.y);
+      store.updateNoteSize(resizeNoteId, newW, newH);
+    }
+    return;
+  }
   if (dragNoteId) {
     const pt = screenToDiagram(e.clientX, e.clientY);
     store.updateNotePosition(
       dragNoteId,
       pt.x - dragNoteStart.x,
-      pt.y - dragNoteStart.y,
+      pt.y - dragNoteStart.y
     );
   }
 }
 
 function onDocumentDragUp(): void {
-  if (dragTableId === null && dragNoteId === null) return;
+  if (dragTableId === null && dragNoteId === null && resizeNoteId === null)
+    return;
   document.removeEventListener("mousemove", onDocumentDragMove);
   document.removeEventListener("mouseup", onDocumentDragUp);
   dragTableId = null;
   dragNoteId = null;
+  resizeNoteId = null;
 }
 
 function setupDocumentDragListeners(): void {
@@ -464,7 +498,7 @@ async function saveDiagram(): Promise<boolean> {
         "Save diagram",
         "schema.diagram",
         "Diagram",
-        "*.diagram",
+        "*.diagram"
       );
     } catch (e) {
       showToast("Save failed: " + (e as Error).message);
@@ -527,18 +561,35 @@ function confirmUnsavedChanges(): Promise<"save" | "discard" | "cancel"> {
   });
 }
 
+async function openDiagramFile(): Promise<void> {
+  if (!bridge.isBackendAvailable()) {
+    showToast("Backend not available (run in Wails)");
+    return;
+  }
+  try {
+    const path = await bridge.openFileDialog(
+      "Open diagram",
+      "Diagram",
+      "*.diagram"
+    );
+    if (path) {
+      const raw = await bridge.loadFile(path);
+      const d = JSON.parse(raw) as Diagram;
+      store.setDiagram(d);
+      store.clearDirty();
+      currentFilePath = path;
+      render();
+      appendStatus(`Opened ${path}`);
+      showToast("Opened");
+    }
+  } catch (e) {
+    showToast("Open failed: " + (e as Error).message);
+  }
+}
+
 function setupToolbar(): void {
   const toolbar = document.createElement("div");
   toolbar.className = "toolbar";
-
-  const addTable = document.createElement("button");
-  addTable.textContent = "Add Table";
-  addTable.onclick = () => {
-    const x = (400 - pan.x) / zoom;
-    const y = (200 - pan.y) / zoom;
-    store.addTable(x, y);
-  };
-  toolbar.appendChild(addTable);
 
   const newBtn = document.createElement("button");
   newBtn.textContent = "New";
@@ -570,31 +621,7 @@ function setupToolbar(): void {
 
   const openBtn = document.createElement("button");
   openBtn.textContent = "Open File";
-  openBtn.onclick = async () => {
-    if (!bridge.isBackendAvailable()) {
-      showToast("Backend not available (run in Wails)");
-      return;
-    }
-    try {
-      const path = await bridge.openFileDialog(
-        "Open diagram",
-        "Diagram",
-        "*.diagram",
-      );
-      if (path) {
-        const raw = await bridge.loadFile(path);
-        const d = JSON.parse(raw) as Diagram;
-        store.setDiagram(d);
-        store.clearDirty();
-        currentFilePath = path;
-        render();
-        appendStatus(`Opened ${path}`);
-        showToast("Opened");
-      }
-    } catch (e) {
-      showToast("Open failed: " + (e as Error).message);
-    }
-  };
+  openBtn.onclick = () => openDiagramFile();
   toolbar.appendChild(openBtn);
 
   const undoBtn = document.createElement("button");
@@ -645,7 +672,7 @@ function setupToolbar(): void {
   exportContent.className = "dropdown-content";
   const exportItems = [
     ["JSON", async () => exportJSON()],
-    ["SQL (PostgreSQL)", async () => exportSQL("postgres")],
+    ["SQL (PostgreSQL)", async () => exportPostgresSQL()],
     ["SQL (BigQuery)", async () => exportBigQuerySQL()],
     ["Mermaid", async () => exportMermaid()],
     ["PNG", () => exportPNG()],
@@ -755,7 +782,7 @@ async function exportJSON(): Promise<void> {
       "Export JSON",
       "schema.json",
       "JSON",
-      "*.json",
+      "*.json"
     );
     if (path) {
       await bridge.saveFile(path, content);
@@ -771,13 +798,113 @@ async function exportSQL(dialect: string): Promise<void> {
   if (!bridge.isBackendAvailable()) throw new Error("Backend not available");
   const sql = await bridge.exportSQL(
     dialect,
-    JSON.stringify(store.getDiagram()),
+    JSON.stringify(store.getDiagram())
   );
   const path = await bridge.saveFileDialog(
     "Export SQL",
     "schema.sql",
     "SQL",
-    "*.sql",
+    "*.sql"
+  );
+  if (path) {
+    await bridge.saveFile(path, sql);
+    showToast("Exported");
+  }
+}
+
+function promptPostgresOptions(): Promise<{ schema: string } | null> {
+  return new Promise((resolve) => {
+    const existing = document.querySelector(".modal-overlay");
+    if (existing) existing.remove();
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    const panel = document.createElement("div");
+    panel.className = "modal-panel modal-panel-postgres-export";
+    const headerDiv = document.createElement("div");
+    headerDiv.className = "modal-postgres-export-header";
+    const title = document.createElement("h2");
+    title.className = "modal-title";
+    title.textContent = "PostgreSQL Export";
+    headerDiv.appendChild(title);
+    panel.appendChild(headerDiv);
+    const contentDiv = document.createElement("div");
+    contentDiv.className = "modal-postgres-export-content";
+    let specifySchemaOn = false;
+    const specifySchemaToggle = document.createElement("button");
+    specifySchemaToggle.type = "button";
+    specifySchemaToggle.className = "modal-toggle";
+    specifySchemaToggle.setAttribute("aria-pressed", "false");
+    specifySchemaToggle.innerHTML =
+      '<span class="modal-toggle-track"><span class="modal-toggle-thumb"></span></span><span class="modal-toggle-label">Specify Schema</span>';
+    const specifySchemaRow = document.createElement("div");
+    specifySchemaRow.className = "modal-postgres-specify-schema-row";
+    specifySchemaRow.appendChild(specifySchemaToggle);
+    contentDiv.appendChild(specifySchemaRow);
+    const schemaRow = document.createElement("div");
+    schemaRow.className = "modal-postgres-schema-row";
+    schemaRow.style.display = "none";
+    const schemaLabel = document.createElement("label");
+    schemaLabel.textContent = "Schema";
+    schemaLabel.className = "modal-label";
+    const schemaInput = document.createElement("input");
+    schemaInput.type = "text";
+    schemaInput.placeholder = "public";
+    schemaInput.className = "modal-input";
+    schemaRow.appendChild(schemaLabel);
+    schemaRow.appendChild(schemaInput);
+    contentDiv.appendChild(schemaRow);
+    specifySchemaToggle.addEventListener("click", () => {
+      specifySchemaOn = !specifySchemaOn;
+      specifySchemaToggle.classList.toggle("modal-toggle-on", specifySchemaOn);
+      specifySchemaToggle.setAttribute(
+        "aria-pressed",
+        String(specifySchemaOn)
+      );
+      schemaRow.style.display = specifySchemaOn ? "block" : "none";
+    });
+    panel.appendChild(contentDiv);
+    const footerDiv = document.createElement("div");
+    footerDiv.className = "modal-postgres-export-footer";
+    const footerButtons = document.createElement("div");
+    footerButtons.className = "modal-postgres-export-footer-buttons";
+    const okBtn = document.createElement("button");
+    okBtn.type = "button";
+    okBtn.textContent = "OK";
+    okBtn.onclick = () => {
+      overlay.remove();
+      resolve({
+        schema: specifySchemaOn ? schemaInput.value.trim() : "",
+      });
+    };
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.onclick = () => {
+      overlay.remove();
+      resolve(null);
+    };
+    footerButtons.appendChild(okBtn);
+    footerButtons.appendChild(cancelBtn);
+    footerDiv.appendChild(footerButtons);
+    panel.appendChild(footerDiv);
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
+  });
+}
+
+async function exportPostgresSQL(): Promise<void> {
+  if (!bridge.isBackendAvailable()) throw new Error("Backend not available");
+  const options = await promptPostgresOptions();
+  if (options === null) return;
+  const sql = await bridge.exportPostgres(
+    JSON.stringify(store.getDiagram()),
+    options.schema
+  );
+  const path = await bridge.saveFileDialog(
+    "Export SQL",
+    "schema.sql",
+    "SQL",
+    "*.sql"
   );
   if (path) {
     await bridge.saveFile(path, sql);
@@ -801,7 +928,7 @@ function promptBigQueryTarget(): Promise<{
     headerDiv.className = "modal-bigquery-target-header";
     const title = document.createElement("h2");
     title.className = "modal-title";
-    title.textContent = "BigQuery target";
+    title.textContent = "BigQuery Export";
     headerDiv.appendChild(title);
     panel.appendChild(headerDiv);
     const contentDiv = document.createElement("div");
@@ -820,17 +947,16 @@ function promptBigQueryTarget(): Promise<{
     datasetInput.type = "text";
     datasetInput.placeholder = "my_dataset";
     datasetInput.className = "modal-input";
-    const useCreationModeCheckbox = document.createElement("input");
-    useCreationModeCheckbox.type = "checkbox";
-    useCreationModeCheckbox.id = "bigquery-use-creation-mode";
-    const useCreationModeLabel = document.createElement("label");
-    useCreationModeLabel.htmlFor = "bigquery-use-creation-mode";
-    useCreationModeLabel.textContent = "Use Creation Mode";
-    useCreationModeLabel.className = "modal-label-inline";
+    let useCreationModeOn = false;
+    const useCreationModeToggle = document.createElement("button");
+    useCreationModeToggle.type = "button";
+    useCreationModeToggle.className = "modal-toggle";
+    useCreationModeToggle.setAttribute("aria-pressed", "false");
+    useCreationModeToggle.innerHTML =
+      '<span class="modal-toggle-track"><span class="modal-toggle-thumb"></span></span><span class="modal-toggle-label">Use create statement modifier</span>';
     const creationModeRow = document.createElement("div");
     creationModeRow.className = "modal-bigquery-creation-mode-row";
-    creationModeRow.appendChild(useCreationModeCheckbox);
-    creationModeRow.appendChild(useCreationModeLabel);
+    creationModeRow.appendChild(useCreationModeToggle);
     const creationModeSelect = document.createElement("select");
     creationModeSelect.className = "modal-input";
     creationModeSelect.disabled = true;
@@ -842,8 +968,14 @@ function promptBigQueryTarget(): Promise<{
     optCreateOrReplace.textContent = "create or replace";
     creationModeSelect.appendChild(optIfNotExists);
     creationModeSelect.appendChild(optCreateOrReplace);
-    useCreationModeCheckbox.addEventListener("change", () => {
-      creationModeSelect.disabled = !useCreationModeCheckbox.checked;
+    useCreationModeToggle.addEventListener("click", () => {
+      useCreationModeOn = !useCreationModeOn;
+      useCreationModeToggle.classList.toggle("modal-toggle-on", useCreationModeOn);
+      useCreationModeToggle.setAttribute(
+        "aria-pressed",
+        String(useCreationModeOn)
+      );
+      creationModeSelect.disabled = !useCreationModeOn;
     });
     contentDiv.appendChild(projectLabel);
     contentDiv.appendChild(projectInput);
@@ -870,9 +1002,7 @@ function promptBigQueryTarget(): Promise<{
       resolve({
         project,
         dataset,
-        creationMode: useCreationModeCheckbox.checked
-          ? creationModeSelect.value
-          : "",
+        creationMode: useCreationModeOn ? creationModeSelect.value : "",
       });
     };
     const cancelBtn = document.createElement("button");
@@ -899,13 +1029,13 @@ async function exportBigQuerySQL(): Promise<void> {
     JSON.stringify(store.getDiagram()),
     target.project,
     target.dataset,
-    target.creationMode,
+    target.creationMode
   );
   const path = await bridge.saveFileDialog(
     "Export SQL",
     "schema.sql",
     "SQL",
-    "*.sql",
+    "*.sql"
   );
   if (path) {
     await bridge.saveFile(path, sql);
@@ -920,7 +1050,7 @@ async function exportMermaid(): Promise<void> {
     "Export Mermaid",
     "schema.mmd",
     "Mermaid",
-    "*.mmd",
+    "*.mmd"
   );
   if (path) {
     await bridge.saveFile(path, mm);
@@ -958,7 +1088,7 @@ async function exportPNG(): Promise<void> {
       "Export PNG",
       "schema.png",
       "PNG",
-      "*.png",
+      "*.png"
     );
     if (!savePath) return;
   }
@@ -1031,7 +1161,7 @@ async function exportSVG(): Promise<void> {
       "Export SVG",
       "schema.svg",
       "SVG",
-      "*.svg",
+      "*.svg"
     );
     if (!path) return;
     let minX = Infinity;
@@ -1053,7 +1183,7 @@ async function exportSVG(): Promise<void> {
     const clone = svgEl.cloneNode(true) as SVGElement;
     const style = document.createElementNS(
       "http://www.w3.org/2000/svg",
-      "style",
+      "style"
     );
     style.textContent = EXPORT_CANVAS_STYLES;
     clone.insertBefore(style, clone.firstChild);
@@ -1061,7 +1191,7 @@ async function exportSVG(): Promise<void> {
     if (group) {
       group.setAttribute(
         "transform",
-        `translate(${pad - minX}, ${pad - minY})`,
+        `translate(${pad - minX}, ${pad - minY})`
       );
     }
     clone.setAttribute("viewBox", `0 0 ${width} ${height}`);
@@ -1091,7 +1221,7 @@ async function exportSVG(): Promise<void> {
     const clone = svgEl.cloneNode(true) as SVGElement;
     const style = document.createElementNS(
       "http://www.w3.org/2000/svg",
-      "style",
+      "style"
     );
     style.textContent = EXPORT_CANVAS_STYLES;
     clone.insertBefore(style, clone.firstChild);
@@ -1099,7 +1229,7 @@ async function exportSVG(): Promise<void> {
     if (group) {
       group.setAttribute(
         "transform",
-        `translate(${pad - minX}, ${pad - minY})`,
+        `translate(${pad - minX}, ${pad - minY})`
       );
     }
     clone.setAttribute("viewBox", `0 0 ${width} ${height}`);
@@ -1145,12 +1275,12 @@ async function openAndImportSQL(): Promise<void> {
     const d = JSON.parse(json) as Diagram;
     store.setDiagram(d);
     appendStatus(
-      `Imported SQL from ${path}: ${d.tables.length} tables, ${d.relationships.length} relationships`,
+      `Imported SQL from ${path}: ${d.tables.length} tables, ${d.relationships.length} relationships`
     );
     if (d.tables.length === 0) {
       appendStatus(
         "No CREATE TABLE statements found. The parser expects PostgreSQL-style DDL: CREATE TABLE name ( col type, ... ); with optional PRIMARY KEY and FOREIGN KEY.",
-        "error",
+        "error"
       );
       showToast("No tables found — check Status panel for expected format");
     } else {
@@ -1171,7 +1301,7 @@ async function openAndImportMermaid(): Promise<void> {
   const path = await bridge.openFileDialog(
     "Open Mermaid",
     "Mermaid",
-    "*.md;*.mmd",
+    "*.md;*.mmd"
   );
   if (!path) return;
   try {
@@ -1183,7 +1313,7 @@ async function openAndImportMermaid(): Promise<void> {
     if (d.tables.length === 0) {
       appendStatus(
         "No entities found. Expected Mermaid erDiagram with entity { } blocks.",
-        "error",
+        "error"
       );
     }
     showToast("Imported Mermaid");
@@ -1280,7 +1410,7 @@ function setupCanvas(): void {
   transformGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
   relationshipsLayer = document.createElementNS(
     "http://www.w3.org/2000/svg",
-    "g",
+    "g"
   );
   tablesLayer = document.createElementNS("http://www.w3.org/2000/svg", "g");
   transformGroup.appendChild(relationshipsLayer);
@@ -1329,7 +1459,7 @@ function setupCanvas(): void {
       store.updateTablePosition(
         dragTableId,
         pt.x - dragStart.x,
-        pt.y - dragStart.y,
+        pt.y - dragStart.y
       );
       const r = svg.getBoundingClientRect();
       let dx = 0;
@@ -1354,7 +1484,7 @@ function setupCanvas(): void {
       store.updateNotePosition(
         dragNoteId,
         pt.x - dragNoteStart.x,
-        pt.y - dragNoteStart.y,
+        pt.y - dragNoteStart.y
       );
       return;
     }
@@ -1379,7 +1509,7 @@ function setupCanvas(): void {
         showRelationshipDialog(
           connectSource.tableId,
           connectSource.fieldId,
-          targetTable.id,
+          targetTable.id
         );
       }
       connectSource = null;
@@ -1399,6 +1529,7 @@ function setupCanvas(): void {
       render();
     }
     dragNoteId = null;
+    resizeNoteId = null;
   });
 
   svg.addEventListener("mouseleave", () => {
@@ -1420,7 +1551,7 @@ function setupCanvas(): void {
         updateTransform();
       }
     },
-    { passive: false },
+    { passive: false }
   );
 
   svg.addEventListener("contextmenu", (e) => {
@@ -1442,7 +1573,7 @@ function setupCanvas(): void {
                 rel.sourceTableId,
                 rel.sourceFieldId,
                 rel.targetTableId,
-                id,
+                id
               ),
           },
           {
@@ -1536,10 +1667,39 @@ function setupCanvas(): void {
         store.deleteRelationship(selection.relationshipId);
       setSelection(null);
     }
+    // Only handle app shortcuts when no modal dialog is open (canvas only)
+    const modalOpen = document.querySelector(".modal-overlay");
+    if (
+      modalOpen &&
+      e.ctrlKey &&
+      ["z", "y", "s", "t", "o"].includes(e.key.toLowerCase())
+    ) {
+      return;
+    }
     if (e.key === "z" && e.ctrlKey) {
       e.preventDefault();
       if (e.shiftKey) store.redo();
       else store.undo();
+    }
+    if (e.key === "y" && e.ctrlKey) {
+      e.preventDefault();
+      store.redo();
+    }
+    if (e.key === "s" && e.ctrlKey) {
+      e.preventDefault();
+      saveDiagram().then((saved) => {
+        if (saved) showToast("Saved");
+      });
+    }
+    if (e.key === "t" && e.ctrlKey) {
+      e.preventDefault();
+      const x = (400 - pan.x) / zoom;
+      const y = (200 - pan.y) / zoom;
+      store.addTable(x, y);
+    }
+    if (e.key === "o" && e.ctrlKey) {
+      e.preventDefault();
+      openDiagramFile();
     }
   });
 }
@@ -1716,7 +1876,7 @@ function showTableEditor(tableId: string): void {
       type: f.type,
       nullable: f.nullable,
       primaryKey: f.primaryKey,
-    }),
+    })
   );
   fieldsSection.appendChild(fieldsTable);
 
@@ -1748,7 +1908,7 @@ function showTableEditor(tableId: string): void {
     relContainer.innerHTML = "";
     const diagram = store.getDiagram();
     const rels = diagram.relationships.filter(
-      (r) => r.sourceTableId === tableId || r.targetTableId === tableId,
+      (r) => r.sourceTableId === tableId || r.targetTableId === tableId
     );
     const currentTable = diagram.tables.find((x) => x.id === tableId)!;
 
@@ -1795,10 +1955,10 @@ function showTableEditor(tableId: string): void {
 
       function updateRelFromRows(): void {
         const srcSelects = mapTbody.querySelectorAll<HTMLSelectElement>(
-          "tr select.src-field",
+          "tr select.src-field"
         );
         const tgtSelects = mapTbody.querySelectorAll<HTMLSelectElement>(
-          "tr select.tgt-field",
+          "tr select.tgt-field"
         );
         const newSrcIds: string[] = [];
         const newTgtIds: string[] = [];
@@ -1863,7 +2023,7 @@ function showTableEditor(tableId: string): void {
       for (let i = 0; i < Math.max(srcIds.length, 1); i++) {
         addMapRow(
           srcIds[i] ?? currentTable.fields[0]?.id ?? "",
-          tgtIds[i] ?? otherTable.fields[0]?.id ?? "",
+          tgtIds[i] ?? otherTable.fields[0]?.id ?? ""
         );
       }
 
@@ -1874,11 +2034,11 @@ function showTableEditor(tableId: string): void {
       addRowBtn.textContent = "Add Field";
       addRowBtn.onclick = () => {
         const srcId = weAreSource
-          ? (currentTable.fields[0]?.id ?? "")
-          : (otherTable.fields[0]?.id ?? "");
+          ? currentTable.fields[0]?.id ?? ""
+          : otherTable.fields[0]?.id ?? "";
         const tgtId = weAreSource
-          ? (otherTable.fields[0]?.id ?? "")
-          : (currentTable.fields[0]?.id ?? "");
+          ? otherTable.fields[0]?.id ?? ""
+          : currentTable.fields[0]?.id ?? "";
         addMapRow(srcId, tgtId);
       };
       card.appendChild(addRowBtn);
@@ -1945,7 +2105,7 @@ function showTableEditor(tableId: string): void {
         sourceTableId,
         [sourceFieldId],
         targetTableId,
-        [targetFieldId],
+        [targetFieldId]
       );
       renderRelationships();
     };
@@ -1991,13 +2151,15 @@ function showRelationshipDialog(
   sourceTableId: string,
   sourceFieldId: string,
   targetTableId: string,
-  relationshipId?: string,
+  relationshipId?: string
 ): void {
   hideRelationshipTooltip();
   const d = store.getDiagram();
   const srcT = d.tables.find((t) => t.id === sourceTableId);
   const tgtT = d.tables.find((t) => t.id === targetTableId);
   if (!srcT || !tgtT) return;
+  const srcTable = srcT;
+  const tgtTable = tgtT;
   const existingRel = relationshipId
     ? d.relationships.find((x) => x.id === relationshipId)
     : null;
@@ -2006,11 +2168,11 @@ function showRelationshipDialog(
     : [sourceFieldId];
   const tgtFieldIds = existingRel?.targetFieldIds?.length
     ? [...existingRel.targetFieldIds]
-    : [existingRel?.targetFieldId ?? tgtT.fields[0]?.id ?? ""];
+    : [existingRel?.targetFieldId ?? tgtTable.fields[0]?.id ?? ""];
   while (srcFieldIds.length < tgtFieldIds.length)
-    srcFieldIds.push(srcT.fields[0]?.id ?? "");
+    srcFieldIds.push(srcTable.fields[0]?.id ?? "");
   while (tgtFieldIds.length < srcFieldIds.length)
-    tgtFieldIds.push(tgtT.fields[0]?.id ?? "");
+    tgtFieldIds.push(tgtTable.fields[0]?.id ?? "");
 
   const existing = document.querySelector(".modal-overlay");
   if (existing) existing.remove();
@@ -2033,7 +2195,7 @@ function showRelationshipDialog(
   srcPrefix.className = "modal-relationship-from-to-label";
   srcPrefix.textContent = "From:";
   srcLabel.appendChild(srcPrefix);
-  srcLabel.appendChild(document.createTextNode(" " + srcT.name));
+  srcLabel.appendChild(document.createTextNode(" " + srcTable.name));
   fromToWrap.appendChild(srcLabel);
   const tgtLabel = document.createElement("div");
   tgtLabel.className = "modal-readonly modal-relationship-from-to-row";
@@ -2041,7 +2203,7 @@ function showRelationshipDialog(
   tgtPrefix.className = "modal-relationship-from-to-label";
   tgtPrefix.textContent = "To:";
   tgtLabel.appendChild(tgtPrefix);
-  tgtLabel.appendChild(document.createTextNode(" " + tgtT.name));
+  tgtLabel.appendChild(document.createTextNode(" " + tgtTable.name));
   fromToWrap.appendChild(tgtLabel);
   headerDiv.appendChild(fromToWrap);
   panel.appendChild(headerDiv);
@@ -2105,12 +2267,12 @@ function showRelationshipDialog(
 
   function addFieldPairRow(
     primaryFieldId: string,
-    foreignFieldId: string,
+    foreignFieldId: string
   ): void {
     const tr = document.createElement("tr");
     const primaryTd = document.createElement("td");
     const primarySel = document.createElement("select");
-    srcT.fields.forEach((f) => {
+    srcTable.fields.forEach((f) => {
       const opt = document.createElement("option");
       opt.value = f.id;
       opt.textContent = f.name;
@@ -2120,7 +2282,7 @@ function showRelationshipDialog(
     primaryTd.appendChild(primarySel);
     const foreignTd = document.createElement("td");
     const foreignSel = document.createElement("select");
-    tgtT.fields.forEach((f) => {
+    tgtTable.fields.forEach((f) => {
       const opt = document.createElement("option");
       opt.value = f.id;
       opt.textContent = f.name;
@@ -2151,7 +2313,7 @@ function showRelationshipDialog(
   for (let i = 0; i < Math.max(srcFieldIds.length, 1); i++) {
     addFieldPairRow(
       srcFieldIds[i] ?? srcT.fields[0]?.id ?? "",
-      tgtFieldIds[i] ?? tgtT.fields[0]?.id ?? "",
+      tgtFieldIds[i] ?? tgtT.fields[0]?.id ?? ""
     );
   }
 
@@ -2162,7 +2324,7 @@ function showRelationshipDialog(
   addFieldPlus.textContent = "+";
   addFieldPlus.title = "Add field pair";
   addFieldPlus.onclick = () => {
-    addFieldPairRow(srcT.fields[0]?.id ?? "", tgtT.fields[0]?.id ?? "");
+    addFieldPairRow(srcTable.fields[0]?.id ?? "", tgtTable.fields[0]?.id ?? "");
   };
   fieldsSection.appendChild(addFieldPlus);
   contentDiv.appendChild(fieldsSection);
@@ -2205,7 +2367,7 @@ function showRelationshipDialog(
         newTargetFieldIds,
         nameInput.value.trim() || undefined,
         noteInput.value.trim() || undefined,
-        cardSelect.value || undefined,
+        cardSelect.value || undefined
       );
     } else {
       store.addRelationshipWithMeta(
@@ -2215,7 +2377,7 @@ function showRelationshipDialog(
         newTargetFieldIds,
         nameInput.value.trim() || undefined,
         noteInput.value.trim() || undefined,
-        cardSelect.value || undefined,
+        cardSelect.value || undefined
       );
     }
     overlay.remove();
@@ -2236,7 +2398,7 @@ function showRelationshipDialog(
 function showNoteEditor(
   canvasX: number,
   canvasY: number,
-  noteId: string | null,
+  noteId: string | null
 ): void {
   const existing = document.querySelector(".modal-overlay");
   if (existing) existing.remove();
@@ -2291,7 +2453,7 @@ function showNoteEditor(
 function showContextMenu(
   x: number,
   y: number,
-  items: { label: string; danger?: boolean; fn: () => void }[],
+  items: { label: string; danger?: boolean; fn: () => void }[]
 ): void {
   const existing = document.querySelector(".context-menu");
   if (existing) existing.remove();
@@ -2313,7 +2475,7 @@ function showContextMenu(
   const close = () => menu.remove();
   setTimeout(
     () => document.addEventListener("click", close, { once: true }),
-    0,
+    0
   );
 }
 
