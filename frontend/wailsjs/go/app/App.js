@@ -10,6 +10,10 @@ export function ExportMermaid(arg1) {
   return window['go']['app']['App']['ExportMermaid'](arg1);
 }
 
+export function ExportPlantUML(arg1) {
+  return window['go']['app']['App']['ExportPlantUML'](arg1);
+}
+
 export function ExportPostgres(arg1, arg2) {
   return window['go']['app']['App']['ExportPostgres'](arg1, arg2);
 }
@@ -26,12 +30,24 @@ export function ImportSQL(arg1) {
   return window['go']['app']['App']['ImportSQL'](arg1);
 }
 
+export function ListFiles(arg1, arg2) {
+  return window['go']['app']['App']['ListFiles'](arg1, arg2);
+}
+
 export function Load(arg1) {
   return window['go']['app']['App']['Load'](arg1);
 }
 
+export function OpenDirectoryDialog(arg1) {
+  return window['go']['app']['App']['OpenDirectoryDialog'](arg1);
+}
+
 export function OpenFileDialog(arg1, arg2, arg3) {
   return window['go']['app']['App']['OpenFileDialog'](arg1, arg2, arg3);
+}
+
+export function Remove(arg1) {
+  return window['go']['app']['App']['Remove'](arg1);
 }
 
 export function Save(arg1, arg2) {

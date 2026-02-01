@@ -1,6 +1,9 @@
 package schema
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // Diagram is the root document for save/load and import/export.
 type Diagram struct {
@@ -97,5 +100,35 @@ func ToMermaid(d Diagram) string {
 		}
 		out += "    " + src + " ||--o{ " + tgt + " : \"\"\n"
 	}
+	return out
+}
+
+// ToPlantUML outputs PlantUML class diagram syntax from the diagram.
+func ToPlantUML(d Diagram) string {
+	out := "@startuml\n"
+	tblByID := make(map[string]string)
+	for i, t := range d.Tables {
+		tblByID[t.ID] = "e" + fmt.Sprintf("%d", i)
+	}
+	for _, t := range d.Tables {
+		alias := tblByID[t.ID]
+		out += "entity \"" + t.Name + "\" as " + alias + " {\n"
+		for _, f := range t.Fields {
+			out += "  * " + f.Name + " : " + f.Type + "\n"
+		}
+		out += "}\n"
+	}
+	for _, r := range d.Relationships {
+		src := tblByID[r.SourceTableID]
+		tgt := tblByID[r.TargetTableID]
+		if src == "" {
+			src = r.SourceTableID
+		}
+		if tgt == "" {
+			tgt = r.TargetTableID
+		}
+		out += src + " ||--o{ " + tgt + "\n"
+	}
+	out += "@enduml\n"
 	return out
 }

@@ -1,4 +1,13 @@
-import type { Diagram, Table, Field, Relationship, Selection } from "./types";
+import type {
+  Diagram,
+  Table,
+  Field,
+  Relationship,
+  Selection,
+  RecentEntry,
+  WorkspaceConfig,
+  CatalogTable,
+} from "./types";
 import { Store, createEmptyDiagram } from "./store";
 import { FIELD_TYPES, CARDINALITY_OPTIONS } from "./types";
 import {
@@ -40,11 +49,96 @@ const EDGE_SCROLL_SPEED = 8;
 let tempLine: SVGPathElement | null = null;
 let statusPanelContent: HTMLElement | null = null;
 let statusPanelEl: HTMLElement | null = null;
+let statusContextEl: HTMLElement | null = null;
 const DEFAULT_STATUS_HEIGHT = 120;
 const COLLAPSED_STATUS_HEIGHT = 28;
 let statusPanelHeight = DEFAULT_STATUS_HEIGHT;
 let statusPanelCollapsed = false;
 let currentFilePath: string | null = null;
+/** Unsubscribe from the previously active store when switching tabs/workspace. */
+let unsubscribeStore: (() => void) | null = null;
+/** Re-bind store subscription (call after bindActiveTab so render/undo/redo track the active store). */
+let bindStoreSubscription: (() => void) | null = null;
+
+// --- App shell (landing vs editor, tabs) ---
+type ViewMode = "landing" | "editor";
+const WORKSPACE_CONFIG_FILE = "workspace.config.json";
+const TABLE_CATALOG_FILE = "table_catalog.json";
+
+type DiagramDoc = {
+  type: "diagram";
+  id: string;
+  label: string;
+  store: Store;
+  path: string | null;
+};
+type InnerDiagramTab = {
+  id: string;
+  label: string;
+  store: Store;
+  path: string; // full path under workspace root
+};
+type WorkspaceDoc = {
+  type: "workspace";
+  id: string;
+  label: string;
+  rootPath: string;
+  name: string;
+  description?: string;
+  catalogTables: CatalogTable[];
+  innerDiagramTabs: InnerDiagramTab[];
+  activeInnerDiagramIndex: number;
+};
+type Doc = DiagramDoc | WorkspaceDoc;
+const RECENT_KEY = "schemastudio-recent";
+const RECENT_MAX = 6;
+
+let rootContainer: HTMLElement;
+let viewMode: ViewMode = "landing";
+let documents: Doc[] = [];
+let activeDocIndex = -1;
+/** When set, workspace is the full app focus (no workspace tab); when null, documents are standalone diagram tabs. */
+let currentWorkspace: WorkspaceDoc | null = null;
+let editorInitialized = false;
+let editorContentEl: HTMLElement | null = null;
+let tabStripEl: HTMLElement | null = null;
+let menuBarEl: HTMLElement | null = null;
+
+function nextDocId(): string {
+  return "doc-" + Math.random().toString(36).slice(2, 11);
+}
+
+function getRecent(): RecentEntry[] {
+  try {
+    const raw = localStorage.getItem(RECENT_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw) as RecentEntry[];
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+function setRecent(entries: RecentEntry[]): void {
+  try {
+    const sorted = [...entries].sort((a, b) => b.lastOpened - a.lastOpened);
+    localStorage.setItem(RECENT_KEY, JSON.stringify(sorted.slice(0, RECENT_MAX)));
+  } catch (_) {}
+}
+
+function addRecent(entry: Omit<RecentEntry, "lastOpened"> & { lastOpened?: number }): void {
+  const now = Date.now();
+  const full: RecentEntry = { ...entry, lastOpened: entry.lastOpened ?? now };
+  const entries = getRecent().filter((e) => e.path !== full.path);
+  entries.unshift(full);
+  setRecent(entries);
+}
+
+function getActiveDoc(): Doc | null {
+  if (currentWorkspace) return currentWorkspace;
+  if (activeDocIndex < 0 || activeDocIndex >= documents.length) return null;
+  return documents[activeDocIndex] ?? null;
+}
 
 function appendStatus(message: string, type: "info" | "error" = "info"): void {
   if (!statusPanelContent) return;
@@ -387,6 +481,7 @@ function render(): void {
     g.addEventListener("mousedown", (e) => {
       if (e.button !== 0) return;
       if ((e.target as Element).closest("[data-field-id]")) return;
+      e.preventDefault(); // prevent text selection so table drag works
       dragTableId = t.id;
       const pt = screenToDiagram(e.clientX, e.clientY);
       dragStart = { x: pt.x - t.x, y: pt.y - t.y };
@@ -510,7 +605,64 @@ async function saveDiagram(): Promise<boolean> {
   try {
     await bridge.saveFile(path, JSON.stringify(store.getDiagram()));
     store.clearDirty();
+    const doc = getActiveDoc();
+    if (doc && doc.type === "diagram") {
+      (doc as DiagramDoc).path = path;
+      (doc as DiagramDoc).label = path.split(/[/\\]/).pop() ?? "Untitled";
+      addRecent({ path, kind: "diagram", label: (doc as DiagramDoc).label, lastOpened: Date.now() });
+      refreshTabStrip();
+    }
     appendStatus(`Saved ${path}`);
+    return true;
+  } catch (e) {
+    showToast("Save failed: " + (e as Error).message);
+    return false;
+  }
+}
+
+/** Save current diagram to a new path (Save As). Returns true if saved. */
+async function saveDiagramAs(): Promise<boolean> {
+  if (!bridge.isBackendAvailable()) {
+    showToast("Backend not available (run in Wails)");
+    return false;
+  }
+  const defaultName =
+    currentFilePath?.split(/[/\\]/).pop() ?? "schema.diagram";
+  let path: string;
+  try {
+    path = await bridge.saveFileDialog(
+      "Save diagram as",
+      defaultName,
+      "Diagram",
+      "*.diagram"
+    );
+  } catch (e) {
+    showToast("Save failed: " + (e as Error).message);
+    return false;
+  }
+  if (!path) return false;
+  try {
+    await bridge.saveFile(path, JSON.stringify(store.getDiagram()));
+    store.clearDirty();
+    currentFilePath = path;
+    const doc = getActiveDoc();
+    if (doc && doc.type === "diagram") {
+      (doc as DiagramDoc).path = path;
+      (doc as DiagramDoc).label = path.split(/[/\\]/).pop() ?? "Untitled";
+      addRecent({ path, kind: "diagram", label: (doc as DiagramDoc).label, lastOpened: Date.now() });
+      refreshTabStrip();
+    } else if (doc && doc.type === "workspace") {
+      const w = doc as WorkspaceDoc;
+      const inner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
+      if (inner) {
+        inner.path = path;
+        inner.label = path.split(/[/\\]/).pop()?.replace(/\.diagram$/i, "") ?? "Diagram";
+        refreshTabStrip();
+        renderWorkspaceView();
+      }
+    }
+    appendStatus(`Saved as ${path}`);
+    showToast("Saved");
     return true;
   } catch (e) {
     showToast("Save failed: " + (e as Error).message);
@@ -592,37 +744,28 @@ function setupToolbar(): void {
   toolbar.className = "toolbar";
 
   const newBtn = document.createElement("button");
-  newBtn.textContent = "New";
-  newBtn.onclick = async () => {
-    if (store.isDirty()) {
-      const choice = await confirmUnsavedChanges();
-      if (choice === "cancel") return;
-      if (choice === "save") {
-        const saved = await saveDiagram();
-        if (!saved) return;
-      }
-    }
-    store.setDiagram(createEmptyDiagram());
-    store.clearDirty();
-    currentFilePath = null;
-    render();
-    appendStatus("New diagram.");
-    showToast("New diagram");
-  };
+  newBtn.textContent = "Add Table";
+  newBtn.title = "Add table to diagram";
+  newBtn.onclick = () => addTableFromToolbar();
   toolbar.appendChild(newBtn);
 
   const saveBtn = document.createElement("button");
   saveBtn.textContent = "Save";
+  saveBtn.title = "Save diagram";
   saveBtn.onclick = async () => {
     const saved = await saveDiagram();
     if (saved) showToast("Saved");
   };
   toolbar.appendChild(saveBtn);
 
-  const openBtn = document.createElement("button");
-  openBtn.textContent = "Open File";
-  openBtn.onclick = () => openDiagramFile();
-  toolbar.appendChild(openBtn);
+  const saveAsBtn = document.createElement("button");
+  saveAsBtn.textContent = "Save As…";
+  saveAsBtn.title = "Save diagram to a new file";
+  saveAsBtn.onclick = async () => {
+    const saved = await saveDiagramAs();
+    if (saved) showToast("Saved");
+  };
+  toolbar.appendChild(saveAsBtn);
 
   const undoBtn = document.createElement("button");
   undoBtn.textContent = "Undo";
@@ -751,11 +894,18 @@ function setupToolbar(): void {
   updateThemeButton();
   toolbar.appendChild(themeBtn);
 
-  store.subscribe(() => {
-    undoBtn.disabled = !store.canUndo();
-    redoBtn.disabled = !store.canRedo();
-    render();
-  });
+  bindStoreSubscription = () => {
+    if (unsubscribeStore) {
+      unsubscribeStore();
+      unsubscribeStore = null;
+    }
+    unsubscribeStore = store.subscribe(() => {
+      undoBtn.disabled = !store.canUndo();
+      redoBtn.disabled = !store.canRedo();
+      render();
+    });
+  };
+  bindStoreSubscription();
 
   document.body.addEventListener("click", (e) => {
     if (!(e.target as Element).closest(".dropdown")) {
@@ -1273,18 +1423,77 @@ async function openAndImportSQL(): Promise<void> {
     const raw = await bridge.loadFile(path);
     const json = await bridge.importSQL(raw);
     const d = JSON.parse(json) as Diagram;
-    store.setDiagram(d);
-    appendStatus(
-      `Imported SQL from ${path}: ${d.tables.length} tables, ${d.relationships.length} relationships`
-    );
-    if (d.tables.length === 0) {
+    const doc = getActiveDoc();
+    if (doc?.type === "workspace") {
+      const w = doc as WorkspaceDoc;
+      for (const table of d.tables) {
+        const catalogId = nextCatalogId();
+        w.catalogTables.push({
+          id: catalogId,
+          name: table.name,
+          fields: table.fields.map((f) => ({
+            id: f.id,
+            name: f.name,
+            type: f.type,
+            nullable: f.nullable,
+            primaryKey: f.primaryKey,
+          })),
+        });
+      }
+      const inner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
+      if (inner) {
+        const GAP = 80;
+        let x = 50;
+        let y = 50;
+        const startIdx = w.catalogTables.length - d.tables.length;
+        for (let i = 0; i < d.tables.length; i++) {
+          const table = d.tables[i];
+          const catalogId = w.catalogTables[startIdx + i].id;
+          inner.store.addTableWithContent(
+            x,
+            y,
+            table.name,
+            table.fields.map((f) => ({
+              name: f.name,
+              type: f.type,
+              nullable: f.nullable,
+              primaryKey: f.primaryKey,
+            })),
+            catalogId
+          );
+          x += 280 + GAP;
+          if (x > 600) {
+            x = 50;
+            y += 200;
+          }
+        }
+      }
+      await saveTableCatalog(w.rootPath, w.catalogTables);
+      bindActiveTab();
+      render();
+      refreshTabStrip();
+      updateEditorContentVisibility();
+      renderWorkspaceView();
       appendStatus(
-        "No CREATE TABLE statements found. The parser expects PostgreSQL-style DDL: CREATE TABLE name ( col type, ... ); with optional PRIMARY KEY and FOREIGN KEY.",
-        "error"
+        inner
+          ? `Imported SQL to catalog and diagram: ${d.tables.length} tables`
+          : `Imported SQL to catalog: ${d.tables.length} tables`
       );
-      showToast("No tables found — check Status panel for expected format");
+      showToast("Imported SQL to catalog");
     } else {
-      showToast("Imported SQL");
+      store.setDiagram(d);
+      appendStatus(
+        `Imported SQL from ${path}: ${d.tables.length} tables, ${d.relationships.length} relationships`
+      );
+      if (d.tables.length === 0) {
+        appendStatus(
+          "No CREATE TABLE statements found. The parser expects PostgreSQL-style DDL: CREATE TABLE name ( col type, ... ); with optional PRIMARY KEY and FOREIGN KEY.",
+          "error"
+        );
+        showToast("No tables found — check Status panel for expected format");
+      } else {
+        showToast("Imported SQL");
+      }
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -1395,11 +1604,61 @@ function setupStatusPanel(): void {
     document.addEventListener("mouseup", onUp);
   });
   panel.appendChild(resizeHandle);
+  const contextDiv = document.createElement("div");
+  contextDiv.className = "status-panel-context";
+  statusContextEl = contextDiv;
+  panel.appendChild(contextDiv);
   const content = document.createElement("div");
   content.className = "status-panel-content";
   statusPanelContent = content;
   panel.appendChild(content);
   container.appendChild(panel);
+}
+
+function updateStatusContext(): void {
+  if (!statusContextEl) return;
+  const doc = getActiveDoc();
+  const parts: string[] = [];
+  if (doc?.type === "workspace") {
+    const w = doc as WorkspaceDoc;
+    parts.push(`Workspace: ${w.name}`);
+    const inner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
+    if (inner) {
+      const name = inner.path.split(/[/\\]/).pop() ?? inner.label;
+      parts.push(`Diagram: ${name}`);
+    }
+  } else if (doc?.type === "diagram") {
+    const label = (doc as DiagramDoc).path
+      ? (doc as DiagramDoc).path.split(/[/\\]/).pop() ?? (doc as DiagramDoc).label
+      : (doc as DiagramDoc).label;
+    parts.push(`Diagram: ${label}`);
+  }
+  statusContextEl.textContent = parts.length > 0 ? parts.join(" | ") : "";
+}
+
+function updateMenuState(): void {
+  const doc = getActiveDoc();
+  const closeDiagramEl = rootContainer?.querySelector(
+    '[data-menu-action="close-diagram"]'
+  ) as HTMLButtonElement | null;
+  const closeWorkspaceEl = rootContainer?.querySelector(
+    '[data-menu-action="close-workspace"]'
+  ) as HTMLButtonElement | null;
+  const workspaceSettingsEl = rootContainer?.querySelector(
+    '[data-menu-action="workspace-settings"]'
+  ) as HTMLButtonElement | null;
+  if (closeDiagramEl) {
+    closeDiagramEl.disabled =
+      !doc ||
+      (doc.type === "workspace" &&
+        (doc as WorkspaceDoc).innerDiagramTabs.length === 0);
+  }
+  if (closeWorkspaceEl) {
+    closeWorkspaceEl.disabled = doc?.type !== "workspace";
+  }
+  if (workspaceSettingsEl) {
+    workspaceSettingsEl.disabled = doc?.type !== "workspace";
+  }
 }
 
 function setupCanvas(): void {
@@ -1429,18 +1688,56 @@ function setupCanvas(): void {
   new ResizeObserver(resize).observe(wrap);
   setupStatusPanel();
 
+  svg.addEventListener("dragover", (e) => {
+    const hasCatalog = e.dataTransfer?.types?.some(
+      (t) => t.toLowerCase() === "catalogtableid"
+    );
+    if (hasCatalog) {
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    }
+  });
+  svg.addEventListener("drop", (e) => {
+    const catalogId = e.dataTransfer?.getData("catalogTableId");
+    if (!catalogId) return;
+    e.preventDefault();
+    const doc = getActiveDoc();
+    if (doc?.type !== "workspace") return;
+    const w = doc as WorkspaceDoc;
+    const inner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
+    if (!inner) return;
+    const catalogEntry = w.catalogTables.find((c) => c.id === catalogId);
+    if (!catalogEntry) return;
+    const pt = screenToDiagram(e.clientX, e.clientY);
+    store.addTableWithContent(
+      pt.x,
+      pt.y,
+      catalogEntry.name,
+      catalogEntry.fields.map((f) => ({
+        name: f.name,
+        type: f.type,
+        nullable: f.nullable,
+        primaryKey: f.primaryKey,
+      })),
+      catalogId
+    );
+    render();
+    appendStatus(`Added ${catalogEntry.name} from catalog`);
+  });
+
   svg.addEventListener("mousedown", (e) => {
     if (e.button !== 0) return;
     if ((e.target as Element).closest("g.canvas-note")) return;
+    const closestTable = (e.target as Element).closest("g.table-group");
     if (
       e.target === svg ||
-      ((e.target as Element).closest("g.table-group") === null &&
+      (closestTable === null &&
         !(e.target as Element).closest("path.relationship-path"))
     ) {
-      if (!(e.target as Element).closest("g.table-group")) {
+      if (!closestTable) {
         setSelection(null);
       }
-      if (!(e.target as Element).closest("g.table-group")) {
+      if (!closestTable) {
         isPanning = true;
         panStart = { x: e.clientX - pan.x, y: e.clientY - pan.y };
       }
@@ -1699,7 +1996,7 @@ function setupCanvas(): void {
     }
     if (e.key === "o" && e.ctrlKey) {
       e.preventDefault();
-      openDiagramFile();
+      openDiagramTab();
     }
   });
 }
@@ -2133,6 +2430,7 @@ function showTableEditor(tableId: string): void {
       primaryKey: r.pkCb.checked,
     }));
     store.replaceTableContent(tableId, name, fields);
+    syncTableToCatalogAndDiagrams(tableId);
     overlay.remove();
     render();
   };
@@ -2450,6 +2748,16 @@ function showNoteEditor(
   document.body.appendChild(overlay);
 }
 
+function showDiagramListContextMenu(
+  e: MouseEvent,
+  w: WorkspaceDoc,
+  filename: string
+): void {
+  showContextMenu(e.clientX, e.clientY, [
+    { label: "Rename…", fn: () => renameWorkspaceDiagramFile(w, filename) },
+  ]);
+}
+
 function showContextMenu(
   x: number,
   y: number,
@@ -2479,12 +2787,1294 @@ function showContextMenu(
   );
 }
 
+// --- Landing view ---
+function showLanding(): void {
+  viewMode = "landing";
+  rootContainer.innerHTML = "";
+  rootContainer.className = "app-root app-landing";
+
+  const wrap = document.createElement("div");
+  wrap.className = "landing-wrap";
+
+  const title = document.createElement("h1");
+  title.className = "landing-title";
+  title.textContent = "Schema Studio";
+  wrap.appendChild(title);
+
+  const startSection = document.createElement("div");
+  startSection.className = "landing-section";
+  const startLabel = document.createElement("h2");
+  startLabel.className = "landing-section-title";
+  startLabel.textContent = "Start";
+  startSection.appendChild(startLabel);
+  const startButtons = document.createElement("div");
+  startButtons.className = "landing-buttons";
+  const newWorkspaceBtn = document.createElement("button");
+  newWorkspaceBtn.className = "landing-btn";
+  newWorkspaceBtn.textContent = "New Workspace";
+  newWorkspaceBtn.onclick = () => newWorkspaceTab();
+  const openWorkspaceBtn = document.createElement("button");
+  openWorkspaceBtn.className = "landing-btn";
+  openWorkspaceBtn.textContent = "Open Workspace";
+  openWorkspaceBtn.onclick = () => openWorkspaceTab();
+  const newDiagramBtn = document.createElement("button");
+  newDiagramBtn.className = "landing-btn";
+  newDiagramBtn.textContent = "New Diagram";
+  newDiagramBtn.onclick = () => newDiagramTab();
+  const openDiagramBtn = document.createElement("button");
+  openDiagramBtn.className = "landing-btn";
+  openDiagramBtn.textContent = "Open Diagram";
+  openDiagramBtn.onclick = () => openDiagramTab();
+  startButtons.appendChild(newWorkspaceBtn);
+  startButtons.appendChild(openWorkspaceBtn);
+  startButtons.appendChild(newDiagramBtn);
+  startButtons.appendChild(openDiagramBtn);
+  startSection.appendChild(startButtons);
+  wrap.appendChild(startSection);
+
+  const recentSection = document.createElement("div");
+  recentSection.className = "landing-section";
+  const recentLabel = document.createElement("h2");
+  recentLabel.className = "landing-section-title";
+  recentLabel.textContent = "Recent";
+  recentSection.appendChild(recentLabel);
+  const recentList = document.createElement("div");
+  recentList.className = "landing-recent-list";
+  const recentEntries = getRecent();
+  if (recentEntries.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "landing-recent-empty";
+    empty.textContent = "No recent items";
+    recentList.appendChild(empty);
+  } else {
+    recentEntries.forEach((entry) => {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "landing-recent-item";
+      row.textContent = entry.label || entry.path;
+      row.title = entry.path;
+      row.onclick = () => openRecentEntry(entry);
+      recentList.appendChild(row);
+    });
+  }
+  recentSection.appendChild(recentList);
+  wrap.appendChild(recentSection);
+
+  rootContainer.appendChild(wrap);
+}
+
+async function openRecentEntry(entry: RecentEntry): Promise<void> {
+  if (entry.kind === "diagram") {
+    await openDiagramTab(entry.path);
+  } else if (entry.kind === "workspace") {
+    await openWorkspaceTab(entry.path);
+  }
+}
+
+function pathJoin(root: string, file: string): string {
+  const sep = root.includes("\\") ? "\\" : "/";
+  return root.endsWith(sep) ? root + file : root + sep + file;
+}
+
+async function loadWorkspaceConfig(rootPath: string): Promise<WorkspaceConfig> {
+  const raw = await bridge.loadFile(pathJoin(rootPath, WORKSPACE_CONFIG_FILE));
+  return JSON.parse(raw) as WorkspaceConfig;
+}
+
+async function loadTableCatalog(rootPath: string): Promise<CatalogTable[]> {
+  try {
+    const raw = await bridge.loadFile(pathJoin(rootPath, TABLE_CATALOG_FILE));
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? (arr as CatalogTable[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveWorkspaceConfig(
+  rootPath: string,
+  config: WorkspaceConfig
+): Promise<void> {
+  await bridge.saveFile(
+    pathJoin(rootPath, WORKSPACE_CONFIG_FILE),
+    JSON.stringify(config, null, 2)
+  );
+}
+
+async function saveTableCatalog(
+  rootPath: string,
+  tables: CatalogTable[]
+): Promise<void> {
+  await bridge.saveFile(
+    pathJoin(rootPath, TABLE_CATALOG_FILE),
+    JSON.stringify(tables, null, 2)
+  );
+}
+
+async function newWorkspaceTab(): Promise<void> {
+  if (!bridge.isBackendAvailable()) {
+    showToast("Backend not available (run in Wails)");
+    return;
+  }
+  try {
+    const rootPath = await bridge.openDirectoryDialog("Choose workspace folder");
+    if (!rootPath) return;
+    const config: WorkspaceConfig = { name: "New Workspace", description: "" };
+    await saveWorkspaceConfig(rootPath, config);
+    await saveTableCatalog(rootPath, []);
+    const label = rootPath.split(/[/\\]/).filter(Boolean).pop() ?? "Workspace";
+    const doc: WorkspaceDoc = {
+      type: "workspace",
+      id: nextDocId(),
+      label,
+      rootPath,
+      name: config.name,
+      description: config.description,
+      catalogTables: [],
+      innerDiagramTabs: [],
+      activeInnerDiagramIndex: -1,
+    };
+    currentWorkspace = doc;
+    addRecent({ path: rootPath, kind: "workspace", label, lastOpened: Date.now() });
+    showWorkspaceView();
+    appendStatus(`Created workspace ${rootPath}`);
+    showToast("Workspace created");
+  } catch (e) {
+    showToast("Failed: " + (e as Error).message);
+  }
+}
+
+async function openWorkspaceTab(path?: string): Promise<void> {
+  let rootPath = path;
+  if (rootPath === undefined) {
+    if (!bridge.isBackendAvailable()) {
+      showToast("Backend not available (run in Wails)");
+      return;
+    }
+    try {
+      rootPath = await bridge.openDirectoryDialog("Open workspace folder");
+    } catch (e) {
+      showToast("Open failed: " + (e as Error).message);
+      return;
+    }
+    if (!rootPath) return;
+  }
+  try {
+    const config = await loadWorkspaceConfig(rootPath);
+    const catalogTables = await loadTableCatalog(rootPath);
+    const label = config.name || (rootPath.split(/[/\\]/).filter(Boolean).pop() ?? "Workspace");
+    const doc: WorkspaceDoc = {
+      type: "workspace",
+      id: nextDocId(),
+      label,
+      rootPath,
+      name: config.name,
+      description: config.description,
+      catalogTables,
+      innerDiagramTabs: [],
+      activeInnerDiagramIndex: -1,
+    };
+    currentWorkspace = doc;
+    addRecent({ path: rootPath, kind: "workspace", label, lastOpened: Date.now() });
+    showWorkspaceView();
+    appendStatus(`Opened workspace ${rootPath}`);
+    showToast("Opened workspace");
+  } catch (e) {
+    showToast("Open failed: " + (e as Error).message);
+  }
+}
+
+function showWorkspaceView(): void {
+  viewMode = "editor";
+  rootContainer.innerHTML = "";
+  rootContainer.className = "app-root app-editor app-workspace";
+
+  menuBarEl = document.createElement("div");
+  menuBarEl.className = "menu-bar";
+  setupMenuBar(menuBarEl);
+  rootContainer.appendChild(menuBarEl);
+
+  const workspaceBody = document.createElement("div");
+  workspaceBody.className = "workspace-body";
+  workspacePanelEl = workspaceBody;
+  rootContainer.appendChild(workspaceBody);
+
+  if (!diagramPanelEl) {
+    diagramPanelEl = document.createElement("div");
+    diagramPanelEl.className = "diagram-panel";
+    container = diagramPanelEl;
+    setupToolbar();
+    setupCanvas();
+    editorInitialized = true;
+  }
+
+  renderWorkspaceView();
+  const w = currentWorkspace;
+  const diagramContainer = workspacePanelEl.querySelector(".workspace-diagram-container");
+  if (
+    diagramContainer &&
+    diagramPanelEl &&
+    w &&
+    w.innerDiagramTabs.length > 0 &&
+    w.activeInnerDiagramIndex >= 0
+  ) {
+    if (diagramPanelEl.parentNode !== diagramContainer) {
+      diagramContainer.appendChild(diagramPanelEl);
+    }
+    diagramPanelEl.style.display = "";
+  }
+
+  bindActiveTab();
+  updateStatusContext();
+  updateMenuState();
+  appendStatus("Ready. Use Import/Export from the toolbar.");
+}
+
+function bindActiveTab(): void {
+  const doc = getActiveDoc();
+  if (doc && doc.type === "diagram") {
+    store = doc.store;
+    currentFilePath = doc.path;
+    const d = store.getDiagram();
+    if (d.viewport) {
+      pan.x = d.viewport.panX ?? 0;
+      pan.y = d.viewport.panY ?? 0;
+      zoom = d.viewport.zoom ?? 1;
+    } else {
+      pan.x = 0;
+      pan.y = 0;
+      zoom = 1;
+    }
+    updateTransform();
+    selection = null;
+    render();
+  } else if (doc && doc.type === "workspace") {
+    const w = doc as WorkspaceDoc;
+    if (
+      w.innerDiagramTabs.length > 0 &&
+      w.activeInnerDiagramIndex >= 0 &&
+      w.activeInnerDiagramIndex < w.innerDiagramTabs.length
+    ) {
+      const inner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
+      store = inner.store;
+      currentFilePath = inner.path;
+      const d = store.getDiagram();
+      if (d.viewport) {
+        pan.x = d.viewport.panX ?? 0;
+        pan.y = d.viewport.panY ?? 0;
+        zoom = d.viewport.zoom ?? 1;
+      } else {
+        pan.x = 0;
+        pan.y = 0;
+        zoom = 1;
+      }
+      updateTransform();
+      selection = null;
+      render();
+    } else {
+      store = new Store(); // dummy when no inner diagram
+      currentFilePath = null;
+    }
+  }
+  if (bindStoreSubscription) bindStoreSubscription();
+  updateEditorContentVisibility();
+  updateStatusContext();
+  updateMenuState();
+}
+
+function persistViewportToStore(): void {
+  const doc = getActiveDoc();
+  if (doc && doc.type === "diagram") {
+    doc.store.setViewport({ panX: pan.x, panY: pan.y, zoom });
+  } else if (doc && doc.type === "workspace") {
+    const w = doc as WorkspaceDoc;
+    const inner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
+    if (inner) inner.store.setViewport({ panX: pan.x, panY: pan.y, zoom });
+  }
+}
+
+function refreshTabStrip(): void {
+  if (currentWorkspace || !tabStripEl) return;
+  tabStripEl.innerHTML = "";
+  documents.forEach((doc, i) => {
+    const tab = document.createElement("div");
+    tab.className =
+      "tab-strip-tab" + (i === activeDocIndex ? " tab-strip-tab-active" : "");
+    const label = document.createElement("span");
+    label.className = "tab-strip-tab-label";
+    label.textContent = doc.type === "diagram" ? doc.label : doc.label;
+    const unsaved = doc.type === "diagram" && doc.store.isDirty();
+    if (unsaved) {
+      label.textContent += " •";
+      tab.title = "Unsaved changes";
+    }
+    const closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.className = "tab-strip-tab-close";
+    closeBtn.innerHTML = "×";
+    closeBtn.title = "Close";
+    closeBtn.onclick = (e) => {
+      e.stopPropagation();
+      closeTab(i);
+    };
+    tab.appendChild(label);
+    tab.appendChild(closeBtn);
+    tab.onclick = () => switchToTab(i);
+    tabStripEl!.appendChild(tab);
+  });
+}
+
+function switchToTab(i: number): void {
+  if (i === activeDocIndex || i < 0 || i >= documents.length) return;
+  persistViewportToStore();
+  activeDocIndex = i;
+  bindActiveTab();
+  refreshTabStrip();
+  appendStatus(
+    getActiveDoc()?.type === "diagram"
+      ? `Switched to ${(getActiveDoc() as DiagramDoc).label}`
+      : "Switched tab"
+  );
+}
+
+async function closeTab(i: number): Promise<void> {
+  const doc = documents[i];
+  if (!doc) return;
+  if (doc.type === "diagram" && doc.store.isDirty()) {
+    store = doc.store;
+    currentFilePath = doc.path;
+    const choice = await confirmUnsavedChanges();
+    if (choice === "cancel") return;
+    if (choice === "save") {
+      const saved = await saveDiagram();
+      if (!saved) return;
+      /* saveDiagram() already updates doc path and addRecent */
+    }
+  }
+  documents.splice(i, 1);
+  if (documents.length === 0) {
+    activeDocIndex = -1;
+    store = new Store(); // dummy so no null refs
+    currentFilePath = null;
+    showLanding();
+    return;
+  }
+  if (activeDocIndex >= documents.length) activeDocIndex = documents.length - 1;
+  if (activeDocIndex === i && i > 0) activeDocIndex = i - 1;
+  else if (activeDocIndex >= i && activeDocIndex > 0) activeDocIndex--;
+  bindActiveTab();
+  refreshTabStrip();
+}
+
+function newDiagramTab(): void {
+  const newStore = new Store();
+  const doc: DiagramDoc = {
+    type: "diagram",
+    id: nextDocId(),
+    label: "Untitled",
+    store: newStore,
+    path: null,
+  };
+  documents.push(doc);
+  activeDocIndex = documents.length - 1;
+  showEditor();
+}
+
+async function openDiagramTab(path?: string): Promise<void> {
+  let targetPath = path;
+  if (targetPath === undefined) {
+    if (!bridge.isBackendAvailable()) {
+      showToast("Backend not available (run in Wails)");
+      return;
+    }
+    try {
+      targetPath = await bridge.openFileDialog(
+        "Open diagram",
+        "Diagram",
+        "*.diagram"
+      );
+    } catch (e) {
+      showToast("Open failed: " + (e as Error).message);
+      return;
+    }
+    if (!targetPath) return;
+  }
+  try {
+    const raw = await bridge.loadFile(targetPath);
+    const d = JSON.parse(raw) as Diagram;
+    const newStore = new Store(d);
+    const label = targetPath.split(/[/\\]/).pop() ?? "Untitled";
+    const doc: DiagramDoc = {
+      type: "diagram",
+      id: nextDocId(),
+      label,
+      store: newStore,
+      path: targetPath,
+    };
+    documents.push(doc);
+    activeDocIndex = documents.length - 1;
+    showEditor();
+    addRecent({ path: targetPath, kind: "diagram", label, lastOpened: Date.now() });
+    appendStatus(`Opened ${targetPath}`);
+    showToast("Opened");
+  } catch (e) {
+    showToast("Open failed: " + (e as Error).message);
+  }
+}
+
+let diagramPanelEl: HTMLElement | null = null;
+let workspacePanelEl: HTMLElement | null = null;
+
+function updateEditorContentVisibility(): void {
+  const doc = getActiveDoc();
+  if (!diagramPanelEl) return;
+  if (doc?.type === "diagram") {
+    if (editorContentEl && diagramPanelEl.parentNode !== editorContentEl) {
+      editorContentEl.appendChild(diagramPanelEl);
+    }
+    diagramPanelEl.style.display = "";
+    if (workspacePanelEl) workspacePanelEl.style.display = "none";
+  } else if (doc?.type === "workspace" && workspacePanelEl) {
+    workspacePanelEl.style.display = "";
+    renderWorkspaceView();
+    const w = doc as WorkspaceDoc;
+    const diagramContainer = workspacePanelEl.querySelector(
+      ".workspace-diagram-container"
+    );
+    if (
+      diagramContainer &&
+      w.innerDiagramTabs.length > 0 &&
+      w.activeInnerDiagramIndex >= 0
+    ) {
+      if (diagramPanelEl.parentNode !== diagramContainer) {
+        diagramContainer.appendChild(diagramPanelEl);
+      }
+      diagramPanelEl.style.display = "";
+    } else {
+      diagramPanelEl.style.display = "none";
+      if (diagramPanelEl.parentNode && editorContentEl && diagramPanelEl.parentNode !== editorContentEl) {
+        editorContentEl.appendChild(diagramPanelEl);
+      }
+    }
+  }
+}
+
+function renderWorkspaceView(): void {
+  const doc = getActiveDoc();
+  if (!workspacePanelEl || doc?.type !== "workspace") return;
+  const w = doc as WorkspaceDoc;
+  // If diagram panel is inside workspace, move it out before clearing so it isn't destroyed
+  if (diagramPanelEl && workspacePanelEl.contains(diagramPanelEl)) {
+    (editorContentEl ?? rootContainer).appendChild(diagramPanelEl);
+  }
+  workspacePanelEl.innerHTML = "";
+  workspacePanelEl.className = "workspace-panel workspace-view";
+
+  const layout = document.createElement("div");
+  layout.className = "workspace-layout";
+
+  const sidebar = document.createElement("div");
+  sidebar.className = "workspace-sidebar";
+
+  const catalogAccordion = document.createElement("div");
+  catalogAccordion.className = "workspace-accordion";
+  const catalogHeader = document.createElement("button");
+  catalogHeader.type = "button";
+  catalogHeader.className = "workspace-accordion-header";
+  catalogHeader.textContent = "Table Catalog";
+  catalogAccordion.appendChild(catalogHeader);
+  const catalogContent = document.createElement("div");
+  catalogContent.className = "workspace-accordion-content";
+  const catalogList = document.createElement("div");
+  catalogList.className = "workspace-catalog-list";
+  w.catalogTables.forEach((t) => {
+    const row = document.createElement("div");
+    row.className = "workspace-catalog-item";
+    const label = document.createElement("span");
+    label.textContent = t.name;
+    label.className = "workspace-catalog-item-label";
+    row.appendChild(label);
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "workspace-catalog-item-delete";
+    deleteBtn.title = "Remove from catalog";
+    deleteBtn.innerHTML = "×";
+    deleteBtn.onclick = (e) => {
+      e.stopPropagation();
+      removeCatalogTable(w, t.id);
+    };
+    row.appendChild(deleteBtn);
+    row.draggable = true;
+    row.dataset.catalogId = t.id;
+    row.ondragstart = (e) => {
+      e.dataTransfer?.setData("catalogTableId", t.id);
+      if (e.dataTransfer) e.dataTransfer.effectAllowed = "copy";
+    };
+    row.ondblclick = () => openCatalogTableEditor(w, t.id);
+    catalogList.appendChild(row);
+  });
+  if (w.catalogTables.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "workspace-empty-msg";
+    empty.textContent = "No tables yet";
+    catalogList.appendChild(empty);
+  }
+  catalogContent.appendChild(catalogList);
+  catalogAccordion.appendChild(catalogContent);
+  sidebar.appendChild(catalogAccordion);
+
+  const diagramsAccordion = document.createElement("div");
+  diagramsAccordion.className = "workspace-accordion";
+  const diagramsHeader = document.createElement("button");
+  diagramsHeader.type = "button";
+  diagramsHeader.className = "workspace-accordion-header";
+  diagramsHeader.textContent = "Diagrams";
+  diagramsAccordion.appendChild(diagramsHeader);
+  const diagramsContent = document.createElement("div");
+  diagramsContent.className = "workspace-accordion-content";
+  const diagramsList = document.createElement("div");
+  diagramsList.className = "workspace-diagrams-list";
+  loadWorkspaceDiagramFiles(w).then((files) => {
+    files.forEach((filename) => {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "workspace-diagram-item";
+      row.textContent = filename;
+      row.onclick = () => openWorkspaceDiagramFile(w, filename);
+      row.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        showDiagramListContextMenu(e, w, filename);
+      });
+      diagramsList.appendChild(row);
+    });
+    if (files.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "workspace-empty-msg";
+      empty.textContent = "No diagram files";
+      diagramsList.appendChild(empty);
+    }
+  });
+  diagramsContent.appendChild(diagramsList);
+  const newDiagramBtn = document.createElement("button");
+  newDiagramBtn.type = "button";
+  newDiagramBtn.className = "workspace-new-diagram-btn";
+  newDiagramBtn.textContent = "New Diagram";
+  newDiagramBtn.onclick = () => {
+    const doc = getActiveDoc();
+    if (doc?.type !== "workspace") return;
+    newWorkspaceDiagram(doc as WorkspaceDoc).catch((e) =>
+      showToast("Failed: " + (e as Error).message)
+    );
+  };
+  diagramsContent.appendChild(newDiagramBtn);
+  diagramsAccordion.appendChild(diagramsContent);
+  sidebar.appendChild(diagramsAccordion);
+
+  const settingsAccordion = document.createElement("div");
+  settingsAccordion.className = "workspace-accordion";
+  const settingsHeader = document.createElement("button");
+  settingsHeader.type = "button";
+  settingsHeader.className = "workspace-accordion-header";
+  settingsHeader.textContent = "Workspace Settings";
+  settingsAccordion.appendChild(settingsHeader);
+  const settingsContent = document.createElement("div");
+  settingsContent.className = "workspace-accordion-content";
+  const nameLabel = document.createElement("label");
+  nameLabel.textContent = "Name";
+  const nameInput = document.createElement("input");
+  nameInput.type = "text";
+  nameInput.className = "workspace-settings-input";
+  nameInput.value = w.name;
+  const descLabel = document.createElement("label");
+  descLabel.textContent = "Description";
+  const descInput = document.createElement("textarea");
+  descInput.className = "workspace-settings-input";
+  descInput.rows = 2;
+  descInput.value = w.description ?? "";
+  const saveSettingsBtn = document.createElement("button");
+  saveSettingsBtn.type = "button";
+  saveSettingsBtn.textContent = "Save";
+  saveSettingsBtn.onclick = () => saveWorkspaceSettings(w, nameInput.value, descInput.value);
+  settingsContent.appendChild(nameLabel);
+  settingsContent.appendChild(nameInput);
+  settingsContent.appendChild(descLabel);
+  settingsContent.appendChild(descInput);
+  settingsContent.appendChild(saveSettingsBtn);
+  settingsAccordion.appendChild(settingsContent);
+  sidebar.appendChild(settingsAccordion);
+
+  layout.appendChild(sidebar);
+
+  const main = document.createElement("div");
+  main.className = "workspace-main";
+
+  const innerTabStrip = document.createElement("div");
+  innerTabStrip.className = "workspace-inner-tabs";
+  w.innerDiagramTabs.forEach((inner, i) => {
+    const tab = document.createElement("div");
+    tab.className =
+      "workspace-inner-tab" +
+      (i === w.activeInnerDiagramIndex ? " workspace-inner-tab-active" : "");
+    tab.textContent = inner.label + (inner.store.isDirty() ? " •" : "");
+    tab.onclick = () => switchWorkspaceInnerTab(w, i);
+    const closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.className = "workspace-inner-tab-close";
+    closeBtn.innerHTML = "×";
+    closeBtn.onclick = (e) => {
+      e.stopPropagation();
+      closeWorkspaceInnerTab(w, i);
+    };
+    tab.appendChild(closeBtn);
+    innerTabStrip.appendChild(tab);
+  });
+  main.appendChild(innerTabStrip);
+
+  const diagramContainer = document.createElement("div");
+  diagramContainer.className = "workspace-diagram-container";
+  if (w.innerDiagramTabs.length === 0 || w.activeInnerDiagramIndex < 0) {
+    const noDiagram = document.createElement("div");
+    noDiagram.className = "workspace-no-diagram";
+    noDiagram.textContent = "Open a diagram from the list or create a new one.";
+    diagramContainer.appendChild(noDiagram);
+  }
+  main.appendChild(diagramContainer);
+  layout.appendChild(main);
+  workspacePanelEl.appendChild(layout);
+
+  catalogHeader.onclick = () => catalogAccordion.classList.toggle("open");
+  diagramsHeader.onclick = () => diagramsAccordion.classList.toggle("open");
+  settingsHeader.onclick = () => settingsAccordion.classList.toggle("open");
+  catalogAccordion.classList.add("open");
+  diagramsAccordion.classList.add("open");
+
+  reattachWorkspaceDiagramPanel();
+}
+
+function reattachWorkspaceDiagramPanel(): void {
+  const doc = getActiveDoc();
+  if (doc?.type !== "workspace" || !workspacePanelEl || !diagramPanelEl) return;
+  const w = doc as WorkspaceDoc;
+  if (w.innerDiagramTabs.length === 0 || w.activeInnerDiagramIndex < 0) return;
+  const diagramContainer = workspacePanelEl.querySelector(".workspace-diagram-container");
+  if (diagramContainer && diagramPanelEl.parentNode !== diagramContainer) {
+    diagramContainer.appendChild(diagramPanelEl);
+    diagramPanelEl.style.display = "";
+  }
+}
+
+function sanitizeDiagramFilename(name: string): string {
+  const s = name.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").trim() || "diagram";
+  return s.endsWith(".diagram") ? s : s + ".diagram";
+}
+
+async function renameWorkspaceDiagramFile(
+  w: WorkspaceDoc,
+  oldFilename: string
+): Promise<void> {
+  if (!bridge.isBackendAvailable()) {
+    showToast("Backend not available");
+    return;
+  }
+  const oldFullPath = pathJoin(w.rootPath, oldFilename);
+  const currentLabel = oldFilename.replace(/\.diagram$/i, "") || "Diagram";
+  const raw = window.prompt("Rename diagram", currentLabel);
+  if (raw == null || raw.trim() === "") return;
+  const newFilename = sanitizeDiagramFilename(raw.trim());
+  if (newFilename === oldFilename) return;
+  const newFullPath = pathJoin(w.rootPath, newFilename);
+  try {
+    const existing = await loadWorkspaceDiagramFiles(w);
+    if (existing.some((f) => f.toLowerCase() === newFilename.toLowerCase())) {
+      showToast("A diagram with that name already exists");
+      return;
+    }
+    const tab = w.innerDiagramTabs.find((t) => t.path === oldFullPath);
+    const content = tab
+      ? JSON.stringify(tab.store.getDiagram())
+      : await bridge.loadFile(oldFullPath);
+    await bridge.saveFile(newFullPath, content);
+    await bridge.removeFile(oldFullPath);
+    if (tab) {
+      tab.path = newFullPath;
+      tab.label = newFilename.replace(/\.diagram$/i, "") || "Diagram";
+    }
+    renderWorkspaceView();
+    refreshTabStrip();
+    appendStatus(`Renamed to ${newFilename}`);
+    showToast("Renamed");
+  } catch (e) {
+    showToast("Rename failed: " + (e as Error).message);
+  }
+}
+
+async function loadWorkspaceDiagramFiles(w: WorkspaceDoc): Promise<string[]> {
+  if (!bridge.isBackendAvailable()) return [];
+  try {
+    return await bridge.listFiles(w.rootPath, "*.diagram");
+  } catch {
+    return [];
+  }
+}
+
+async function openWorkspaceDiagramFile(
+  w: WorkspaceDoc,
+  filename: string
+): Promise<void> {
+  const fullPath = pathJoin(w.rootPath, filename);
+  try {
+    const raw = await bridge.loadFile(fullPath);
+    const d = JSON.parse(raw) as Diagram;
+    const newStore = new Store(d);
+    const existing = w.innerDiagramTabs.find((t) => t.path === fullPath);
+    if (existing) {
+      const idx = w.innerDiagramTabs.indexOf(existing);
+      w.activeInnerDiagramIndex = idx;
+      bindActiveTab();
+      refreshTabStrip();
+      updateEditorContentVisibility();
+      renderWorkspaceView();
+      return;
+    }
+    const label = filename.replace(/\.diagram$/i, "") || "Diagram";
+    w.innerDiagramTabs.push({
+      id: nextDocId(),
+      label,
+      store: newStore,
+      path: fullPath,
+    });
+    w.activeInnerDiagramIndex = w.innerDiagramTabs.length - 1;
+    bindActiveTab();
+    refreshTabStrip();
+    updateEditorContentVisibility();
+    renderWorkspaceView();
+    appendStatus(`Opened ${filename}`);
+  } catch (e) {
+    showToast("Open failed: " + (e as Error).message);
+  }
+}
+
+async function newWorkspaceDiagram(w: WorkspaceDoc): Promise<void> {
+  const suggested =
+    "diagram" +
+    (w.innerDiagramTabs.length > 0 ? String(w.innerDiagramTabs.length + 1) : "");
+  const nameInput = window.prompt("Diagram name?", suggested);
+  const baseName = (nameInput?.trim() && nameInput.trim()) || "diagram";
+  let filename = sanitizeDiagramFilename(baseName);
+  try {
+    const existing = await loadWorkspaceDiagramFiles(w);
+    const existingSet = new Set(existing.map((f) => f.toLowerCase()));
+    if (existingSet.has(filename.toLowerCase())) {
+      let n = 1;
+      const stem = filename.replace(/\.diagram$/i, "");
+      while (existingSet.has(filename.toLowerCase())) {
+        filename = stem + n + ".diagram";
+        n++;
+      }
+    }
+  } catch (_) {
+    // use chosen filename if list fails
+  }
+  const fullPath = pathJoin(w.rootPath, filename);
+  const label = filename.replace(/\.diagram$/i, "") || "Diagram";
+  const newStore = new Store();
+  w.innerDiagramTabs.push({
+    id: nextDocId(),
+    label,
+    store: newStore,
+    path: fullPath,
+  });
+  w.activeInnerDiagramIndex = w.innerDiagramTabs.length - 1;
+  bindActiveTab();
+  refreshTabStrip();
+  updateEditorContentVisibility();
+  renderWorkspaceView();
+  try {
+    await bridge.saveFile(fullPath, JSON.stringify(newStore.getDiagram()));
+    appendStatus(`Created ${filename}`);
+    showToast("New diagram");
+  } catch (e) {
+    appendStatus(`Saved diagram to catalog; file write failed: ${(e as Error).message}`, "error");
+    showToast("New diagram (save to disk failed)");
+  }
+}
+
+function switchWorkspaceInnerTab(w: WorkspaceDoc, index: number): void {
+  if (index === w.activeInnerDiagramIndex) return;
+  persistViewportToStore();
+  w.activeInnerDiagramIndex = index;
+  bindActiveTab();
+  refreshTabStrip();
+  updateEditorContentVisibility();
+  renderWorkspaceView();
+}
+
+async function closeWorkspaceInnerTab(w: WorkspaceDoc, index: number): Promise<void> {
+  const inner = w.innerDiagramTabs[index];
+  if (!inner) return;
+  if (inner.store.isDirty()) {
+    store = inner.store;
+    currentFilePath = inner.path;
+    const choice = await confirmUnsavedChanges();
+    if (choice === "cancel") return;
+    if (choice === "save") {
+      await bridge.saveFile(inner.path, JSON.stringify(inner.store.getDiagram()));
+      inner.store.clearDirty();
+    }
+  }
+  w.innerDiagramTabs.splice(index, 1);
+  if (w.activeInnerDiagramIndex >= w.innerDiagramTabs.length) {
+    w.activeInnerDiagramIndex = Math.max(0, w.innerDiagramTabs.length - 1);
+  } else if (index < w.activeInnerDiagramIndex) {
+    w.activeInnerDiagramIndex--;
+  }
+  bindActiveTab();
+  refreshTabStrip();
+  updateEditorContentVisibility();
+  renderWorkspaceView();
+}
+
+async function saveWorkspaceSettings(
+  w: WorkspaceDoc,
+  name: string,
+  description: string
+): Promise<void> {
+  w.name = name;
+  w.description = description;
+  await saveWorkspaceConfig(w.rootPath, { name, description });
+  w.label = name || w.label;
+  refreshTabStrip();
+  showToast("Settings saved");
+}
+
+function openCatalogTableEditor(w: WorkspaceDoc, catalogId: string): void {
+  const catalogEntry = w.catalogTables.find((c) => c.id === catalogId);
+  if (!catalogEntry) return;
+  for (let i = 0; i < w.innerDiagramTabs.length; i++) {
+    const tab = w.innerDiagramTabs[i];
+    const table = tab.store.getDiagram().tables.find(
+      (t) => t.catalogTableId === catalogId
+    );
+    if (table) {
+      w.activeInnerDiagramIndex = i;
+      bindActiveTab();
+      refreshTabStrip();
+      updateEditorContentVisibility();
+      renderWorkspaceView();
+      showTableEditor(table.id);
+      return;
+    }
+  }
+  const inner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
+  if (!inner) {
+    showToast("Open or create a diagram first");
+    return;
+  }
+  const newTable = inner.store.addTableWithContent(
+    200,
+    200,
+    catalogEntry.name,
+    catalogEntry.fields.map((f) => ({
+      name: f.name,
+      type: f.type,
+      nullable: f.nullable,
+      primaryKey: f.primaryKey,
+    })),
+    catalogId
+  );
+  bindActiveTab();
+  render();
+  refreshTabStrip();
+  updateEditorContentVisibility();
+  renderWorkspaceView();
+  showTableEditor(newTable.id);
+}
+
+async function removeCatalogTable(w: WorkspaceDoc, catalogId: string): Promise<void> {
+  const idx = w.catalogTables.findIndex((c) => c.id === catalogId);
+  if (idx < 0) return;
+  w.catalogTables.splice(idx, 1);
+  for (const tab of w.innerDiagramTabs) {
+    const d = tab.store.getDiagram();
+    const table = d.tables.find((t) => t.catalogTableId === catalogId);
+    if (table) tab.store.setTableCatalogId(table.id, null);
+  }
+  await saveTableCatalog(w.rootPath, w.catalogTables);
+  refreshTabStrip();
+  updateEditorContentVisibility();
+  renderWorkspaceView();
+  showToast("Removed from catalog");
+}
+
+function showEditor(): void {
+  viewMode = "editor";
+  rootContainer.innerHTML = "";
+  rootContainer.className = "app-root app-editor";
+
+  menuBarEl = document.createElement("div");
+  menuBarEl.className = "menu-bar";
+  setupMenuBar(menuBarEl);
+  rootContainer.appendChild(menuBarEl);
+
+  tabStripEl = document.createElement("div");
+  tabStripEl.className = "tab-strip";
+  rootContainer.appendChild(tabStripEl);
+
+  editorContentEl = document.createElement("div");
+  editorContentEl.className = "editor-content";
+  rootContainer.appendChild(editorContentEl);
+
+  if (!diagramPanelEl) {
+    diagramPanelEl = document.createElement("div");
+    diagramPanelEl.className = "diagram-panel";
+    container = diagramPanelEl;
+    setupToolbar();
+    setupCanvas();
+    editorInitialized = true;
+  }
+  if (diagramPanelEl.parentNode !== editorContentEl) {
+    editorContentEl.appendChild(diagramPanelEl);
+  }
+  diagramPanelEl.style.display = "";
+
+  bindActiveTab();
+  refreshTabStrip();
+  updateStatusContext();
+  updateMenuState();
+  appendStatus("Ready. Use Import/Export from the toolbar.");
+}
+
+function setupMenuBar(menuBar: HTMLElement): void {
+  const fileMenu = document.createElement("div");
+  fileMenu.className = "menu-bar-item";
+  const fileBtn = document.createElement("button");
+  fileBtn.className = "menu-bar-btn";
+  fileBtn.textContent = "File";
+  fileBtn.onclick = () => toggleMenu(fileMenu);
+  fileMenu.appendChild(fileBtn);
+  const fileDropdown = document.createElement("div");
+  fileDropdown.className = "menu-bar-dropdown";
+  const fileItems = [
+    ["New Workspace", () => newWorkspaceTab(), false],
+    ["Open Workspace", () => openWorkspaceTab(), false],
+    ["New Diagram", () => newDiagramTab(), false],
+    ["Open Diagram", () => openDiagramTab(), false],
+    null,
+    ["Save", () => saveDiagram().then((s) => s && showToast("Saved")), false],
+    ["Save As…", () => saveDiagramAs().then((s) => s && showToast("Saved")), false],
+    ["Close Diagram", () => closeActiveDiagram(), false],
+    ["Close Workspace", () => closeWorkspaceTab(), false],
+    ["Close All Diagrams", () => closeAllDiagramTabs(), false],
+    null,
+    ["Exit", () => window.close(), false],
+  ] as [string, () => void | Promise<void>, boolean][];
+  const fileActionMap: Record<string, string> = {
+    "Close Diagram": "close-diagram",
+    "Close Workspace": "close-workspace",
+  };
+  fileItems.forEach((item) => {
+    if (item === null) {
+      const sep = document.createElement("div");
+      sep.className = "menu-bar-sep";
+      fileDropdown.appendChild(sep);
+      return;
+    }
+    const [label, fn, disabled] = item;
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "menu-bar-dropdown-item";
+    b.textContent = label;
+    b.disabled = disabled as boolean;
+    const action = fileActionMap[label as string];
+    if (action) b.dataset.menuAction = action;
+    b.onclick = () => {
+      hideMenus();
+      (fn as () => void)();
+    };
+    fileDropdown.appendChild(b);
+  });
+  fileMenu.appendChild(fileDropdown);
+  menuBar.appendChild(fileMenu);
+
+  const editMenu = document.createElement("div");
+  editMenu.className = "menu-bar-item";
+  const editBtn = document.createElement("button");
+  editBtn.className = "menu-bar-btn";
+  editBtn.textContent = "Edit";
+  editBtn.onclick = () => toggleMenu(editMenu);
+  editMenu.appendChild(editBtn);
+  const editDropdown = document.createElement("div");
+  editDropdown.className = "menu-bar-dropdown";
+  [
+    ["Workspace Settings", () => {}, false],
+    null,
+    ["Undo", () => store.undo(), false],
+    ["Redo", () => store.redo(), false],
+    null,
+    ["New Table", () => addTableFromToolbar(), false],
+    null,
+    ["Toggle Light/Dark Theme", () => toggleTheme(), false],
+  ].forEach((item) => {
+    if (item === null) {
+      const sep = document.createElement("div");
+      sep.className = "menu-bar-sep";
+      editDropdown.appendChild(sep);
+      return;
+    }
+    const [label, fn] = item as [string, () => void];
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "menu-bar-dropdown-item";
+    b.textContent = label;
+    if (label === "Workspace Settings") b.dataset.menuAction = "workspace-settings";
+    b.onclick = () => {
+      hideMenus();
+      fn();
+    };
+    editDropdown.appendChild(b);
+  });
+  editMenu.appendChild(editDropdown);
+  menuBar.appendChild(editMenu);
+
+  const toolsMenu = document.createElement("div");
+  toolsMenu.className = "menu-bar-item";
+  const toolsBtn = document.createElement("button");
+  toolsBtn.className = "menu-bar-btn";
+  toolsBtn.textContent = "Tools";
+  toolsBtn.onclick = () => toggleMenu(toolsMenu);
+  toolsMenu.appendChild(toolsBtn);
+  const toolsDropdown = document.createElement("div");
+  toolsDropdown.className = "menu-bar-dropdown";
+  [
+    ["Import Tables", () => openAndImportSQL(), false],
+    ["Export", null, false],
+    ["Layout", null, false],
+  ].forEach((item) => {
+    const [label, fn, isSub] = item as [string, (() => void) | null, boolean];
+    if (label === "Export") {
+      const sub = document.createElement("div");
+      sub.className = "menu-bar-submenu";
+      sub.innerHTML = "<span class='menu-bar-submenu-label'>Export</span>";
+      ["SQL DDL", "PNG", "SVG", "Mermaid", "PlantUML"].forEach((exportLabel) => {
+        const subItem = document.createElement("button");
+        subItem.type = "button";
+        subItem.className = "menu-bar-dropdown-item";
+        subItem.textContent = exportLabel;
+        subItem.onclick = () => {
+          hideMenus();
+          if (exportLabel === "SQL DDL") exportPostgresSQL().catch((e) => showToast((e as Error).message));
+          else if (exportLabel === "PNG") exportPNG();
+          else if (exportLabel === "SVG") exportSVG();
+          else if (exportLabel === "Mermaid") exportMermaid().catch((e) => showToast((e as Error).message));
+          else if (exportLabel === "PlantUML") exportPlantUML().catch((e) => showToast((e as Error).message));
+        };
+        sub.appendChild(subItem);
+      });
+      toolsDropdown.appendChild(sub);
+      return;
+    }
+    if (label === "Layout") {
+      const sub = document.createElement("div");
+      sub.className = "menu-bar-submenu";
+      sub.innerHTML = "<span class='menu-bar-submenu-label'>Layout</span>";
+      ["Grid", "Hierarchical", "Force-directed"].forEach((layoutLabel) => {
+        const subItem = document.createElement("button");
+        subItem.type = "button";
+        subItem.className = "menu-bar-dropdown-item";
+        subItem.textContent = layoutLabel;
+        const layout = layoutLabel === "Force-directed" ? "force" : layoutLabel.toLowerCase().slice(0, 4) as "grid" | "hierarchical" | "force";
+        subItem.onclick = () => {
+          hideMenus();
+          store.applyLayout(layout);
+        };
+        sub.appendChild(subItem);
+      });
+      toolsDropdown.appendChild(sub);
+      return;
+    }
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "menu-bar-dropdown-item";
+    b.textContent = label;
+    b.onclick = () => {
+      hideMenus();
+      if (fn) fn();
+    };
+    toolsDropdown.appendChild(b);
+  });
+  toolsMenu.appendChild(toolsDropdown);
+  menuBar.appendChild(toolsMenu);
+
+  document.addEventListener("click", (e) => {
+    if (!(e.target as Element).closest(".menu-bar-item")) hideMenus();
+  });
+}
+
+function hideMenus(): void {
+  rootContainer.querySelectorAll(".menu-bar-item.open").forEach((el) => el.classList.remove("open"));
+}
+
+function toggleMenu(menuItem: HTMLElement): void {
+  const wasOpen = menuItem.classList.contains("open");
+  hideMenus();
+  if (!wasOpen) menuItem.classList.add("open");
+}
+
+function toggleTheme(): void {
+  const theme = document.documentElement.getAttribute("data-theme") ?? "dark";
+  const next = theme === "dark" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", next);
+  try {
+    localStorage.setItem("erd-theme", next);
+  } catch (_) {}
+  showToast(next === "dark" ? "Dark theme" : "Light theme");
+}
+
+function nextCatalogId(): string {
+  return "catalog-" + Math.random().toString(36).slice(2, 11);
+}
+
+async function syncTableToCatalogAndDiagrams(tableId: string): Promise<void> {
+  const doc = getActiveDoc();
+  if (doc?.type !== "workspace") return;
+  const w = doc as WorkspaceDoc;
+  const inner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
+  if (!inner) return;
+  const d = inner.store.getDiagram();
+  const table = d.tables.find((t) => t.id === tableId);
+  if (!table?.catalogTableId) return;
+  const catalogEntry = w.catalogTables.find((c) => c.id === table.catalogTableId);
+  if (!catalogEntry) return;
+  catalogEntry.name = table.name;
+  catalogEntry.fields = table.fields.map((f) => ({
+    id: f.id,
+    name: f.name,
+    type: f.type,
+    nullable: f.nullable,
+    primaryKey: f.primaryKey,
+  }));
+  for (const tab of w.innerDiagramTabs) {
+    if (tab === inner) continue;
+    const otherD = tab.store.getDiagram();
+    const otherTable = otherD.tables.find(
+      (t) => t.catalogTableId === table.catalogTableId
+    );
+    if (otherTable) {
+      const otherFields = otherTable.fields;
+      const fields = catalogEntry.fields.map((cf, i) => ({
+        id: otherFields[i]?.id,
+        name: cf.name,
+        type: cf.type,
+        nullable: cf.nullable,
+        primaryKey: cf.primaryKey,
+      }));
+      tab.store.replaceTableContent(otherTable.id, catalogEntry.name, fields);
+      await bridge.saveFile(
+        tab.path,
+        JSON.stringify(tab.store.getDiagram())
+      );
+      tab.store.clearDirty();
+    }
+  }
+  await saveTableCatalog(w.rootPath, w.catalogTables);
+  refreshTabStrip();
+  updateEditorContentVisibility();
+  renderWorkspaceView();
+}
+
+function addTableFromToolbar(): void {
+  const doc = getActiveDoc();
+  if (!doc) return;
+  const centerX = 200;
+  const centerY = 200;
+  if (doc.type === "workspace") {
+    const w = doc as WorkspaceDoc;
+    const inner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
+    if (!inner) {
+      showToast("Open or create a diagram first");
+      return;
+    }
+    const table = inner.store.addTable(centerX, centerY);
+    const catalogId = nextCatalogId();
+    const catalogEntry: CatalogTable = {
+      id: catalogId,
+      name: table.name,
+      fields: table.fields.map((f) => ({
+        id: f.id,
+        name: f.name,
+        type: f.type,
+        nullable: f.nullable,
+        primaryKey: f.primaryKey,
+      })),
+    };
+    w.catalogTables.push(catalogEntry);
+    inner.store.setTableCatalogId(table.id, catalogId);
+    saveTableCatalog(w.rootPath, w.catalogTables).catch((e) =>
+      showToast("Failed to save catalog: " + (e as Error).message)
+    );
+    render();
+    refreshTabStrip();
+    updateEditorContentVisibility();
+    renderWorkspaceView();
+    appendStatus("Table added to diagram and catalog.");
+  } else {
+    doc.store.addTable(centerX, centerY);
+    render();
+    appendStatus("Table added.");
+  }
+}
+
+async function closeActiveDiagram(): Promise<void> {
+  const doc = getActiveDoc();
+  if (doc?.type === "workspace") {
+    const w = doc as WorkspaceDoc;
+    if (
+      w.innerDiagramTabs.length > 0 &&
+      w.activeInnerDiagramIndex >= 0 &&
+      w.activeInnerDiagramIndex < w.innerDiagramTabs.length
+    ) {
+      await closeWorkspaceInnerTab(w, w.activeInnerDiagramIndex);
+    }
+  } else if (doc?.type === "diagram") {
+    await closeTab(activeDocIndex);
+  }
+}
+
+async function closeWorkspaceTab(): Promise<void> {
+  if (!currentWorkspace) return;
+  currentWorkspace = null;
+  workspacePanelEl = null;
+  if (documents.length > 0) {
+    activeDocIndex = 0;
+    showEditor();
+  } else {
+    store = new Store();
+    currentFilePath = null;
+    showLanding();
+  }
+}
+
+async function closeAllDiagramTabs(): Promise<void> {
+  const doc = getActiveDoc();
+  if (doc?.type === "workspace") {
+    const w = doc as WorkspaceDoc;
+    while (w.innerDiagramTabs.length > 0) {
+      await closeWorkspaceInnerTab(w, 0);
+    }
+  } else {
+    while (documents.length > 0) {
+      await closeTab(0);
+    }
+  }
+}
+
 export function init(el: HTMLElement): void {
+  rootContainer = el;
   container = el;
   store = new Store();
-  container.innerHTML = "";
-  setupToolbar();
-  setupCanvas();
-  render();
-  appendStatus("Ready. Use Import/Export from the toolbar.");
+  documents = [];
+  activeDocIndex = -1;
+  currentWorkspace = null;
+  editorInitialized = false;
+  showLanding();
 }

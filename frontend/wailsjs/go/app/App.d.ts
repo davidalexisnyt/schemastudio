@@ -5,6 +5,8 @@ export function ExportBigQuery(arg1:string,arg2:string,arg3:string,arg4:string):
 
 export function ExportMermaid(arg1:string):Promise<string>;
 
+export function ExportPlantUML(arg1:string):Promise<string>;
+
 export function ExportPostgres(arg1:string,arg2:string):Promise<string>;
 
 export function ExportSQL(arg1:string,arg2:string):Promise<string>;
@@ -13,9 +15,15 @@ export function ImportMermaid(arg1:string):Promise<string>;
 
 export function ImportSQL(arg1:string):Promise<string>;
 
+export function ListFiles(arg1:string,arg2:string):Promise<Array<string>>;
+
 export function Load(arg1:string):Promise<string>;
 
+export function OpenDirectoryDialog(arg1:string):Promise<string>;
+
 export function OpenFileDialog(arg1:string,arg2:string,arg3:string):Promise<string>;
+
+export function Remove(arg1:string):Promise<void>;
 
 export function Save(arg1:string,arg2:string):Promise<void>;
 

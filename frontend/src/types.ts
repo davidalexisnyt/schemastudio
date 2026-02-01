@@ -18,6 +18,8 @@ export interface Table {
   x: number;
   y: number;
   fields: Field[];
+  /** When set, this table is an instance of the catalog entry with this id; edits sync to catalog and other diagrams. */
+  catalogTableId?: string;
 }
 
 export interface Relationship {
@@ -80,3 +82,34 @@ export const FIELD_TYPES = [
   "boolean",
   "other",
 ] as const;
+
+/** Recent entry for landing page (workspace or diagram). */
+export interface RecentEntry {
+  path: string;
+  kind: "workspace" | "diagram";
+  label?: string;
+  lastOpened: number;
+}
+
+/** Workspace config (workspace.config.json). */
+export interface WorkspaceConfig {
+  name: string;
+  description?: string;
+}
+
+/** Table in catalog (id is the stable catalog id; compatible with Table). */
+export interface CatalogTable {
+  id: string;
+  name: string;
+  x?: number;
+  y?: number;
+  fields: Field[];
+}
+
+/** Workspace state (in-memory). */
+export interface WorkspaceState {
+  rootPath: string;
+  name: string;
+  description?: string;
+  catalogTables: CatalogTable[];
+}

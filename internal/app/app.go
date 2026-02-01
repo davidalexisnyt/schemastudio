@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"os"
+	"path/filepath"
+	"sort"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
@@ -51,6 +53,11 @@ func (a *App) Load(path string) (string, error) {
 	return string(b), nil
 }
 
+// Remove deletes the file at the given path (e.g. for rename: save to new path then remove old).
+func (a *App) Remove(path string) error {
+	return os.Remove(path)
+}
+
 // SaveFileDialog opens a save file dialog and returns the chosen path, or empty string if cancelled.
 func (a *App) SaveFileDialog(title string, defaultFilename string, filterName string, filterPattern string) (string, error) {
 	opts := runtime.SaveDialogOptions{
@@ -74,6 +81,31 @@ func (a *App) OpenFileDialog(title string, filterName string, filterPattern stri
 		},
 	}
 	return runtime.OpenFileDialog(a.ctx, opts)
+}
+
+// OpenDirectoryDialog opens a directory dialog and returns the chosen path, or empty string if cancelled.
+func (a *App) OpenDirectoryDialog(title string) (string, error) {
+	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: title,
+	})
+}
+
+// ListFiles returns file names in rootPath matching pattern (e.g. "*.diagram"), relative to rootPath.
+func (a *App) ListFiles(rootPath string, pattern string) ([]string, error) {
+	matches, err := filepath.Glob(filepath.Join(rootPath, pattern))
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, m := range matches {
+		info, err := os.Stat(m)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		out = append(out, filepath.Base(m))
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // ExportSQL returns DDL for the given dialect ("postgres" or "bigquery") from the diagram JSON.
@@ -129,4 +161,13 @@ func (a *App) ExportMermaid(jsonContent string) (string, error) {
 		return "", err
 	}
 	return schema.ToMermaid(d), nil
+}
+
+// ExportPlantUML returns PlantUML class diagram syntax from the diagram JSON.
+func (a *App) ExportPlantUML(jsonContent string) (string, error) {
+	var d schema.Diagram
+	if err := json.Unmarshal([]byte(jsonContent), &d); err != nil {
+		return "", err
+	}
+	return schema.ToPlantUML(d), nil
 }

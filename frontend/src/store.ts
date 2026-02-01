@@ -120,11 +120,50 @@ export class Store {
     return t;
   }
 
+  addTableWithContent(
+    x: number,
+    y: number,
+    name: string,
+    fields: { name: string; type: string; nullable?: boolean; primaryKey?: boolean }[],
+    catalogTableId?: string
+  ): Table {
+    this.pushUndo();
+    const t: Table = {
+      id: nextId("t"),
+      name,
+      x,
+      y,
+      fields: fields.map((f) => ({
+        id: nextId("f"),
+        name: f.name,
+        type: (f.type || "text").toLowerCase(),
+        nullable: f.nullable ?? false,
+        primaryKey: f.primaryKey ?? false,
+      })),
+    };
+    if (catalogTableId) t.catalogTableId = catalogTableId;
+    this.diagram.tables.push(t);
+    this.notify();
+    return t;
+  }
+
   updateTablePosition(tableId: string, x: number, y: number): void {
     const t = this.diagram.tables.find((x) => x.id === tableId);
     if (!t) return;
     t.x = x;
     t.y = y;
+    this.dirty = true;
+    this.notify();
+  }
+
+  setTableCatalogId(tableId: string, catalogTableId: string | null): void {
+    const t = this.diagram.tables.find((x) => x.id === tableId);
+    if (!t) return;
+    if (catalogTableId) {
+      t.catalogTableId = catalogTableId;
+    } else {
+      delete t.catalogTableId;
+    }
     this.dirty = true;
     this.notify();
   }

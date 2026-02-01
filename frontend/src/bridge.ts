@@ -6,6 +6,7 @@ declare global {
           Save(path: string, content: string): Promise<void>;
           SaveBase64(path: string, base64Data: string): Promise<void>;
           Load(path: string): Promise<string>;
+          Remove(path: string): Promise<void>;
           SaveFileDialog(
             title: string,
             defaultFilename: string,
@@ -17,6 +18,8 @@ declare global {
             filterName: string,
             filterPattern: string,
           ): Promise<string>;
+          OpenDirectoryDialog(title: string): Promise<string>;
+          ListFiles(rootPath: string, pattern: string): Promise<string[]>;
           ExportSQL(dialect: string, jsonContent: string): Promise<string>;
           ExportPostgres(jsonContent: string, schema: string): Promise<string>;
           ExportBigQuery(
@@ -28,6 +31,7 @@ declare global {
           ImportSQL(sqlContent: string): Promise<string>;
           ImportMermaid(mermaidContent: string): Promise<string>;
           ExportMermaid(jsonContent: string): Promise<string>;
+          ExportPlantUML(jsonContent: string): Promise<string>;
         };
       };
     };
@@ -59,6 +63,12 @@ export async function loadFile(path: string): Promise<string> {
   return app.Load(path);
 }
 
+export async function removeFile(path: string): Promise<void> {
+  const app = getApp();
+  if (!app) throw new Error("Backend not available");
+  return app.Remove(path);
+}
+
 export async function saveFileDialog(
   title: string,
   defaultFilename: string,
@@ -78,6 +88,18 @@ export async function openFileDialog(
   const app = getApp();
   if (!app) throw new Error("Backend not available");
   return app.OpenFileDialog(title, filterName, filterPattern);
+}
+
+export async function openDirectoryDialog(title: string): Promise<string> {
+  const app = getApp();
+  if (!app) throw new Error("Backend not available");
+  return app.OpenDirectoryDialog(title);
+}
+
+export async function listFiles(rootPath: string, pattern: string): Promise<string[]> {
+  const app = getApp();
+  if (!app) throw new Error("Backend not available");
+  return app.ListFiles(rootPath, pattern);
 }
 
 export async function exportSQL(
@@ -125,6 +147,12 @@ export async function exportMermaid(jsonContent: string): Promise<string> {
   const app = getApp();
   if (!app) throw new Error("Backend not available");
   return app.ExportMermaid(jsonContent);
+}
+
+export async function exportPlantUML(jsonContent: string): Promise<string> {
+  const app = getApp();
+  if (!app) throw new Error("Backend not available");
+  return app.ExportPlantUML(jsonContent);
 }
 
 export function isBackendAvailable(): boolean {

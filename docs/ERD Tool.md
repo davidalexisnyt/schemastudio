@@ -37,8 +37,6 @@ I want to build an entity relationship diagram tool with the following capabilit
   - JavaScript / TypeScript
 - The application should be written like as a desktop application or progressive web app (PWA) and should be installable on the user's device.
 
-
-
 In deciding the technology stack and architecture, consider the following:
 
 - It is highly preferable that the application be a desktop application, but if it is not possible, then a web application is acceptable.
@@ -49,8 +47,6 @@ In deciding the technology stack and architecture, consider the following:
   - Wails (Go)
   - Flet (Python)
   - Tauri (Rust)
-
-
 
 The application architecture should be designed to be modular and easy to extend. This is especially important for the feature to export the schema to SQL.
 The SQL export feature should be designed to be extensible to support multiple database systems.
@@ -64,17 +60,11 @@ Given the above requirements, please provide a detailed plan for the project inc
 - The testing strategy
 - The deployment strategy
 
-
-
 ---
-
-
 
 # Addressing Issues in Inital Build
 
 The initial build of the app looks great, but there are a few issues and unimplemented features. Let's work on them incrementally.
-
-
 
 ## Things That Work Well
 
@@ -82,8 +72,6 @@ The initial build of the app looks great, but there are a few issues and unimple
 - Save: The save feature works as expected.
 - Load: The load feature works as expected and the diagram gets displayed exactly as it was when it was saved.
 - Undo and Redo: These work very well.
-
-
 
 ## Things That Need Work
 
@@ -95,16 +83,12 @@ The initial build of the app looks great, but there are a few issues and unimple
 
 Let's create a plan for addressing these issues in phases
 
-
-
 ## Phase 1 - Edit Tables
 
 Let's change the UX for table editing.
 
 - Show a popup editor dialog with the table details when the user double-clicks on a table.
 - Allow the user to make changes to the table name and fields, then click an OK button to persist the changes and update the diagram.
-
-
 
 ## Phase 2 - Connect
 
@@ -120,25 +104,17 @@ Let's improve the UX of the Connect feature
   - The table editor dialog should be modal and should only be closed by the user clicking on OK or Cancel. It should not close if the user clicks outside the dialog.
   - Focus should go to the name entry for the new field when the user clicks the "Add field" button.
 
-
-
 ## Phase 3 - Import/Export
 
 The code for SQL and Mermaid importers were generated in the initial build, but they don't seem to be connected to the UI. Let's get the "Import" button/dropdown functionality connected and working.
 
 Code for exporters was also generated in the initial build, but the Export button/dropdown does nothing. Let's get that implemented.
 
-
-
 ## Phase 4 - Layout
 
 This may be the most difficult to implement so let's leave it for later.
 
-
-
 ---
-
-
 
 ## Interim Prompts for Addressing Issues
 
@@ -152,11 +128,7 @@ This may be the most difficult to implement so let's leave it for later.
 8. The crows-foot notation is not being displayed on the relationship lines. Please investigate and fix.
 9. This is not working. Please revert all changed made to implement crows-foot notation.
 
-
-
 ---
-
-
 
 # Some General Design Changes and Updates
 
@@ -167,15 +139,11 @@ This may be the most difficult to implement so let's leave it for later.
 5. The PNG export does not work. The tables and and lines appear as black blobs. The PNG export should be styled as if in light mode.
 6. Implement a dark/light mode theme switch.
 
-
-
 # New/Updated Relationship Capabilities
 
 Display the popup Relationship editor dialog when a relationship line is double clicked. This should be the same dialog displayed when the user is first creating a relationship.
 
 Display an information tooltip when the user hovers over a relationship line. The tooltip should show the relationship name (if the user had entered one), the cardinality, and the source and target fields.
-
-
 
 # Table Editor Changes
 
@@ -194,8 +162,6 @@ Display an information tooltip when the user hovers over a relationship line. Th
   - Allow the user to select a field (dropdown list) from the source current table and the associated field (dropdown) from the target table.
   - Display an Add Field button to allow the user to add more related fields.
 
-
-
 # Editor Dialog/Window
 
 - The section header for Fields should be styled like the one for Relationships. Add a divider line above and the "Fields" should be bolded and the same size as the "Relationships" header.
@@ -208,11 +174,9 @@ Display an information tooltip when the user hovers over a relationship line. Th
   - Use a slightly darker background color for the header and footer sections.
 - Dragging a field to a new position does not work. The drag operation works, but the drop does nothing. Please investigate and fix.
 
-
-
 # New/Edit Relationship Dialog
 
-Let's re-design the Relationship editor. 
+Let's re-design the Relationship editor.
 
 - Split the dialog into 3 sections similar to what we did with the Table Editor dialog
   - Static header section with the dialog title and the `From: <table name` and `To: <table name>`.
@@ -233,8 +197,6 @@ Let's re-design the Relationship editor.
 - For compound key relationships, draw a single line between the tables instead of multiple.
 - Add an Edit option to the relationship line context menu.
 
-
-
 # Table Object Changes
 
 The table object on the canvas is using a fixed width, but some tables have fields that exceed this width, causing part of the name to get displayed outside the box. Update the table display rules so that the current width is used as the default/minimum width and the table width scales automatically for tables with wide field names.
@@ -243,8 +205,6 @@ The table object on the canvas is using a fixed width, but some tables have fiel
 
 - The calculation of the table width is leaving an excessive amount of space to the right of even the longest field name + type. Ensure that the gap between the right table border and the end of the longest field name + type is about the same as the gap between the left table border and the beginning of the field name.
 - Display the field list in the table object in a two-column table. This will produce a more pleasing layout and should simplify the calculation of the table width.
-
-
 
 # Canvas Features and Bug Fixes
 
@@ -262,8 +222,6 @@ The table object on the canvas is using a fixed width, but some tables have fiel
     - Allow the user to reposition the sticky by dragging it.
     - Double-clicking on the sticky opens the note editor.
 
-  
-
 - When dragging beyond the edge of the canvas, the canvas should scroll in the opposite direction.
 
 - This works well, and scrolls the canvas when the mouse approaches the edge of the canvas. Except that if I drag the mouse past the edge of the canvas, the drag operation is terminated and scrolling stops. Is there a way to either prevent the mouse pointer from leaving the canvas when in drag mode or to maintain the drag and scroll operation if the cursor leaves the canvas?
@@ -272,31 +230,22 @@ The table object on the canvas is using a fixed width, but some tables have fiel
 
 - Relationship lines sometimes end up connecting to tables at sharp angles. This causes arrowheads to be rendered sideways and partly embedded in the table box. Let's fix how relationship lines are drawn. Lines should always exit and enter tables at a 90 degree angle.
 
-
-
 ---
 
 # Export Changes
 
-
-
 - When exporting to SQL DDL
+
   - do not surround field names with back-ticks or quotes unless the name has spaces
   - All SQL keywords and data types must be in lowercase. There's no need for the SQL to be shouting at us.
 
 - The export to PNG should be higher resolution, and should create an image of the all the items on the canvas, regardless of whether they are in view or not.
 - The SVG export consists of just black blobs. Investigate why this is and address the issue. Use the same fix done for the same problem with the PNG export.
 
-
-
-
-
 - Save/load diagrams to/from files named with the `.diagram` extention instead of `.json`.
 - Rename the "Load" operation to "Open File".
 - Keep track of the file that was opened. When the user clicks Save after modifying a diagram that was opened, save the diagram to the same file, overwrite the existing contents. If the diagram was created new, then perform the existing Save operation, showing a File Save dialog.
 - Add controls to create a new diagram. If there have been any changes to the current diagram, ask the user whether the changes should be saved or discarded. After saving or discarding the current diagram canvas, display a new, blank canvas.
-
-
 
 ## BigQuery Export Changes
 
@@ -306,20 +255,14 @@ The table object on the canvas is using a fixed width, but some tables have fiel
 - Prompt the user for the target BigQuery project and dataset. Use these values when generating the fully qualified table names in the export.
 - Add a checkbox option called "Use Creation Mode" assosiated with a dropdown with options for "if not exists" and "create or replace". When unchecked, the dropdown is disabled. When checked, the dropdown is enabled and the user can select an option. Do not use use the creation mode when generating the DDL is the checkbox is unchecked. When checked, generate the DDL accordingly.
 
-
-
 ## Postgres Export
 
 - Add a PostgreSQL Export dialog that looks like the BigQuery export dialog. In the content area of the dialog add a toggle button for "Specify Schema". When the toggle is on, a text entry field with the label "Schema" should be displayed. When the toggle is off, the field should be hidden.
 - When generating the exported DDL, generate the table names with the specified schema prefix if the "Specify Schema" toggle is on.
 
-
-
 ### BigQuery Export Fixes
 
 Style the BigQuery export options dialog consistently with the Table Editor dialog - specifically the header and footer styling.
-
-
 
 # Misc Fixes
 
@@ -335,19 +278,26 @@ Style the BigQuery export options dialog consistently with the Table Editor dial
   - Remove the Add Table button. We can add tables with Ctrl-T or from the canvas context menu.
 - On both the Postgres and BigQuery export options dialogs, change the checkbox to a toggle button.
 
-
-
-
-
-
-
 ---
 
 # Application Revision 2
 
 ## Features
 
+### Projects
 
+Let's introduce a new diagram grouping concept called a Project.
+
+The app will support creating standalone diagrams or projects. A project is a container for a set of tables available to be added on diagrams and a set of diagrams based on a subset of those tables. For example, we can create a project for an entire database or application. We can then add multiple diagrams to the project, each with a subset of the tables. A project holds a number of artifacts:
+
+- Table Catalog
+  - The table catalog contains a list of tables that the user can work with on different diagrams within the project.
+  - Tables are added to the project manually through the New Table operation, which will pop up the current Table Editor to allow the user to define the table.
+    - The New Table operation is accessible from the Edit -> New Table menu or an icon on the button bar at the top of the Table Catalog.
+
+A project can be configured with defaults for things like BigQuery and Postgres export settings.
+A project is stored in a folder, which contains the project configuration file, table catalog file, and all the diagram files for for the project.
+The definitions of tables used on a diagram are copied to the diagram. However, any modifications made to a table in a diagram (new fields, relationships, etc) are synced back to the table catalog and to all other diagrams in the project that use the table. This enables diagrams to be independent and sharable outside the project.
 
 ### Landing Page
 
@@ -361,20 +311,73 @@ The app should start on a landing page similar to the funtionality of the Visual
   - Open Diagram
   - New Project
   - Open Project
-- A "Recent" section showing the last 6 things the user worked on. 
-  - Each entry should indicate with an icon whether it was a project or a diagram.
+- A "Recent" section showing the last 6 things the user worked on.
+  - Each entry should indicate whether it was a project or a diagram.
 
-![image-20260129102022263](C:\Users\208308\AppData\Roaming\Typora\typora-user-images\image-20260129102022263.png)
+![image-20260129102022263](C:\Code\erd\docs\assets\image-20260129102022263.png)
 
-### Projects
+### User Interface Changes
 
-The app should support creating standalone diagrams or projects. A project is a container for a set of tables available to be added on diagrams. For example, we can create a project for an entire database or application. We can then add multiple diagrams to the project, each with a subset of the tables.
+We're going to rethink the user interface to make is more robust and flexible.
 
-This
+The current design just has a working canvas on the screen. This canvas just gets replaced with a new blank one if the user clicks the New button or imports from DDL, Mermaid, etc. The new UI will show either the Welcome screen, or a blank area if no "documents" are open. The user can open more than one diagram or project, which will appear in a tabbed interface. Each tab will show its own canvas or workspace. Users can close a diagram or project tab either from the File menu (defined below) or the Close icon on a tab.
 
+The UI will show different views in the main content area depending on whether a diagram or a project is currently open.
 
+#### Diagram UI
 
+When a diagram tab is currently open, the main content area would look like it does in the current application UI - i.e. it will be taken up by the diagram canvas.
 
+#### Project UI
+
+When a project tab is currently open, the main contain area will be divided into a left sidebar pane and a main content pane
+
+- Project Sidebar: The sidebar is collapsible and is divided into collapsible sections for:
+  - Table Catalog: The table catalog will display a list of tables currently defined in the project. The section has a small button bar with button/icons for New Table and Import Tables.
+  - Files: List of diagrams in the project. The user will be able to open the diagrams by clicking on them. Each diagram will open in a new tab in the left pane content area.
+- Content area: This is where diagrams would be displayed in a tabbed interface, allowing multiple diagrams to be open.
+
+#### Menus
+
+Let's make the application look more polished by replacing the top button bar with a menu bar.
+
+Menus
+
+- File
+  - New Diagram: Creates a new, blank canvas where we can create a diagram.
+  - New Project: Creates a new project. We'll define how projects work later.
+  - <separator>
+  - Open Diagram: Displays an Open File dialog where we can select a `.diagram` file to open.
+  - Open Project: Open an existing project. We'll define how this works later.
+  - <separator>
+  - Save: Saves the current document, whether that's a diagram or a project.
+  - Close Diagram
+  - Close Project
+- Edit
+
+  - Project Settings
+  - <separator>
+  - Undo
+  - Redo
+  - <separator>
+  - New Table
+  - <separator>
+  - theme toggle (dark/light)
+
+- Tools
+
+  - Layout
+
+    - <list of layout options>
+
+  - Import...
+  - Export...
+
+---
+
+The attempt to a
+
+---
 
 ### Tables and Schema Information
 
@@ -387,11 +390,3 @@ Target Metadata:
   - Schema prefix for Postgres?
 
 Not sure how to represent this in the editor yet. Maybe there's just an Edit Target Metadata button that pops up a dialog to enter/edit the table metadata. And for fields there can be a similar thing next to each field.
-
-
-
----
-
-Misc
-
-- Write more activity logs to the status panel. Keep only the last 100 entries.
