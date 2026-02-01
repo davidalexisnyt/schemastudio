@@ -186,10 +186,18 @@ body {
   display: flex;
   align-items: center;
   gap: 0.25rem;
+  width: 100%;
   padding: 0.35rem 0.5rem;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
   font-size: 0.8125rem;
   color: var(--text);
   cursor: default;
+}
+
+.workspace-catalog-item:hover {
+  background: var(--border);
 }
 
 .workspace-catalog-item-label {
@@ -213,6 +221,9 @@ body {
   cursor: pointer;
   font-size: 1rem;
   line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .workspace-catalog-item-delete:hover {
@@ -220,8 +231,14 @@ body {
   background: var(--border);
 }
 
-.workspace-diagram-item {
+.workspace-catalog-item-delete svg {
   display: block;
+}
+
+.workspace-diagram-item {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
   width: 100%;
   padding: 0.35rem 0.5rem;
   border: none;
@@ -235,6 +252,39 @@ body {
 
 .workspace-diagram-item:hover {
   background: var(--border);
+}
+
+.workspace-diagram-item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.workspace-diagram-item:hover .workspace-diagram-item-delete {
+  visibility: visible;
+}
+
+.workspace-diagram-item-delete {
+  visibility: hidden;
+  padding: 0 0.2rem;
+  border: none;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.workspace-diagram-item-delete:hover {
+  color: var(--danger);
+  background: var(--border);
+}
+
+.workspace-diagram-item-delete svg {
+  display: block;
 }
 
 .workspace-new-diagram-btn {
@@ -528,6 +578,61 @@ body {
   padding: 0.25rem 0.75rem;
   font-size: 0.75rem;
   color: var(--muted);
+}
+
+/* Expandable submenu row (trigger) and flyout to the right */
+.menu-bar-submenu-wrapper {
+  position: relative;
+}
+
+.menu-bar-submenu-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0.4rem 0.75rem;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.875rem;
+  text-align: left;
+  box-sizing: border-box;
+}
+
+.menu-bar-submenu-row:hover {
+  background: var(--border);
+}
+
+.menu-bar-submenu-arrow {
+  margin-left: 0.5rem;
+  font-size: 0.65rem;
+  color: var(--muted);
+}
+
+.menu-bar-flyout {
+  display: none;
+  position: absolute;
+  left: 100%;
+  top: 0;
+  margin-left: 0;
+  min-width: 200px;
+  padding: 0.25rem 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 1001;
+}
+
+.menu-bar-submenu-wrapper:hover > .menu-bar-flyout,
+.menu-bar-submenu-wrapper.menu-bar-flyout-open > .menu-bar-flyout {
+  display: block;
+}
+
+.menu-bar-flyout .menu-bar-dropdown-item {
+  display: block;
 }
 
 /* Tab strip */
@@ -918,6 +1023,72 @@ body {
   max-height: 85vh;
   overflow: auto;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
+
+/* Confirm dialogs (Delete table, Delete diagram) – same 3-section layout as Edit Table / Edit Relationship */
+.modal-panel-confirm {
+  display: flex;
+  flex-direction: column;
+  width: 400px;
+  max-width: 90vw;
+  max-height: 85vh;
+  overflow: hidden;
+}
+
+.modal-panel-confirm .modal-confirm-header {
+  flex-shrink: 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  padding: 1rem 1.25rem;
+  margin: -1rem -1.25rem 0.25rem;
+}
+
+.modal-panel-confirm .modal-confirm-content {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  margin: 0 -0.25rem;
+  padding: 0 0.25rem;
+}
+
+.modal-panel-confirm .modal-confirm-message {
+  margin: 0 0 1rem;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  font-size: 0.875rem;
+  color: var(--text);
+}
+
+.modal-panel-confirm .modal-confirm-footer {
+  flex-shrink: 0;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  padding: 1rem 1.25rem;
+  margin: 1rem -1.25rem -1rem;
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.modal-panel-confirm .modal-confirm-footer button {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.modal-panel-confirm .modal-confirm-delete-btn {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.modal-panel-confirm .modal-confirm-delete-btn:hover {
+  background: var(--danger);
+  color: var(--surface);
 }
 
 .modal-panel-table-editor {

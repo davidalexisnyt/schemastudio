@@ -64,6 +64,10 @@ let bindStoreSubscription: (() => void) | null = null;
 let autoSaveTimeoutId: ReturnType<typeof setTimeout> | null = null;
 const AUTO_SAVE_DELAY_MS = 5000;
 
+/** Inline SVG for trash/delete icon (16×16). */
+const TRASH_ICON_SVG =
+  '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>';
+
 // --- App shell (landing vs editor, tabs) ---
 type ViewMode = "landing" | "editor";
 const WORKSPACE_CONFIG_FILE = "workspace.config.json";
@@ -93,7 +97,7 @@ type WorkspaceDoc = {
   catalogTables: CatalogTable[];
   innerDiagramTabs: InnerDiagramTab[];
   activeInnerDiagramIndex: number;
-  /** When true, auto-save diagrams within 5 seconds of a change. */
+  /** When true, save diagrams automatically. */
   autoSaveDiagrams?: boolean;
   /** Sidebar accordion open state and scroll; persisted in workspace.state. */
   workspaceUIState?: WorkspaceUIState;
@@ -131,11 +135,16 @@ function getRecent(): RecentEntry[] {
 function setRecent(entries: RecentEntry[]): void {
   try {
     const sorted = [...entries].sort((a, b) => b.lastOpened - a.lastOpened);
-    localStorage.setItem(RECENT_KEY, JSON.stringify(sorted.slice(0, RECENT_MAX)));
+    localStorage.setItem(
+      RECENT_KEY,
+      JSON.stringify(sorted.slice(0, RECENT_MAX))
+    );
   } catch (_) {}
 }
 
-function addRecent(entry: Omit<RecentEntry, "lastOpened"> & { lastOpened?: number }): void {
+function addRecent(
+  entry: Omit<RecentEntry, "lastOpened"> & { lastOpened?: number }
+): void {
   const now = Date.now();
   const full: RecentEntry = { ...entry, lastOpened: entry.lastOpened ?? now };
   const entries = getRecent().filter((e) => e.path !== full.path);
@@ -618,7 +627,12 @@ async function saveDiagram(): Promise<boolean> {
     if (doc && doc.type === "diagram") {
       (doc as DiagramDoc).path = path;
       (doc as DiagramDoc).label = path.split(/[/\\]/).pop() ?? "Untitled";
-      addRecent({ path, kind: "diagram", label: (doc as DiagramDoc).label, lastOpened: Date.now() });
+      addRecent({
+        path,
+        kind: "diagram",
+        label: (doc as DiagramDoc).label,
+        lastOpened: Date.now(),
+      });
       refreshTabStrip();
     } else if (doc && doc.type === "workspace") {
       refreshTabStrip();
@@ -638,8 +652,7 @@ async function saveDiagramAs(): Promise<boolean> {
     showToast("Backend not available (run in Wails)");
     return false;
   }
-  const defaultName =
-    currentFilePath?.split(/[/\\]/).pop() ?? "schema.diagram";
+  const defaultName = currentFilePath?.split(/[/\\]/).pop() ?? "schema.diagram";
   let path: string;
   try {
     path = await bridge.saveFileDialog(
@@ -661,14 +674,23 @@ async function saveDiagramAs(): Promise<boolean> {
     if (doc && doc.type === "diagram") {
       (doc as DiagramDoc).path = path;
       (doc as DiagramDoc).label = path.split(/[/\\]/).pop() ?? "Untitled";
-      addRecent({ path, kind: "diagram", label: (doc as DiagramDoc).label, lastOpened: Date.now() });
+      addRecent({
+        path,
+        kind: "diagram",
+        label: (doc as DiagramDoc).label,
+        lastOpened: Date.now(),
+      });
       refreshTabStrip();
     } else if (doc && doc.type === "workspace") {
       const w = doc as WorkspaceDoc;
       const inner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
       if (inner) {
         inner.path = path;
-        inner.label = path.split(/[/\\]/).pop()?.replace(/\.diagram$/i, "") ?? "Diagram";
+        inner.label =
+          path
+            .split(/[/\\]/)
+            .pop()
+            ?.replace(/\.diagram$/i, "") ?? "Diagram";
         refreshTabStrip();
         renderWorkspaceView();
       }
@@ -1051,10 +1073,7 @@ function promptPostgresOptions(): Promise<{ schema: string } | null> {
     specifySchemaToggle.addEventListener("click", () => {
       specifySchemaOn = !specifySchemaOn;
       specifySchemaToggle.classList.toggle("modal-toggle-on", specifySchemaOn);
-      specifySchemaToggle.setAttribute(
-        "aria-pressed",
-        String(specifySchemaOn)
-      );
+      specifySchemaToggle.setAttribute("aria-pressed", String(specifySchemaOn));
       schemaRow.style.display = specifySchemaOn ? "block" : "none";
     });
     panel.appendChild(contentDiv);
@@ -1165,7 +1184,10 @@ function promptBigQueryTarget(): Promise<{
     creationModeSelect.appendChild(optCreateOrReplace);
     useCreationModeToggle.addEventListener("click", () => {
       useCreationModeOn = !useCreationModeOn;
-      useCreationModeToggle.classList.toggle("modal-toggle-on", useCreationModeOn);
+      useCreationModeToggle.classList.toggle(
+        "modal-toggle-on",
+        useCreationModeOn
+      );
       useCreationModeToggle.setAttribute(
         "aria-pressed",
         String(useCreationModeOn)
@@ -1674,7 +1696,8 @@ function updateStatusContext(): void {
     }
   } else if (doc?.type === "diagram") {
     const label = (doc as DiagramDoc).path
-      ? (doc as DiagramDoc).path.split(/[/\\]/).pop() ?? (doc as DiagramDoc).label
+      ? (doc as DiagramDoc).path.split(/[/\\]/).pop() ??
+        (doc as DiagramDoc).label
       : (doc as DiagramDoc).label;
     parts.push(`Diagram: ${label}`);
   }
@@ -2953,7 +2976,9 @@ async function saveTableCatalog(
   );
 }
 
-async function loadWorkspaceUIState(rootPath: string): Promise<WorkspaceUIState> {
+async function loadWorkspaceUIState(
+  rootPath: string
+): Promise<WorkspaceUIState> {
   if (!bridge.isBackendAvailable()) return {};
   try {
     const raw = await bridge.loadFile(pathJoin(rootPath, WORKSPACE_STATE_FILE));
@@ -2984,9 +3009,15 @@ async function newWorkspaceTab(): Promise<void> {
     return;
   }
   try {
-    const rootPath = await bridge.openDirectoryDialog("Choose workspace folder");
+    const rootPath = await bridge.openDirectoryDialog(
+      "Choose workspace folder"
+    );
     if (!rootPath) return;
-    const config: WorkspaceConfig = { name: "New Workspace", description: "", autoSaveDiagrams: false };
+    const config: WorkspaceConfig = {
+      name: "New Workspace",
+      description: "",
+      autoSaveDiagrams: false,
+    };
     await saveWorkspaceConfig(rootPath, config);
     await saveTableCatalog(rootPath, []);
     const label = rootPath.split(/[/\\]/).filter(Boolean).pop() ?? "Workspace";
@@ -3001,10 +3032,19 @@ async function newWorkspaceTab(): Promise<void> {
       innerDiagramTabs: [],
       activeInnerDiagramIndex: -1,
       autoSaveDiagrams: config.autoSaveDiagrams ?? false,
-      workspaceUIState: { catalogOpen: true, diagramsOpen: true, settingsOpen: false },
+      workspaceUIState: {
+        catalogOpen: true,
+        diagramsOpen: true,
+        settingsOpen: false,
+      },
     };
     currentWorkspace = doc;
-    addRecent({ path: rootPath, kind: "workspace", label, lastOpened: Date.now() });
+    addRecent({
+      path: rootPath,
+      kind: "workspace",
+      label,
+      lastOpened: Date.now(),
+    });
     showWorkspaceView();
     appendStatus(`Created workspace ${rootPath}`);
     showToast("Workspace created");
@@ -3032,7 +3072,9 @@ async function openWorkspaceTab(path?: string): Promise<void> {
     const config = await loadWorkspaceConfig(rootPath);
     const catalogTables = await loadTableCatalog(rootPath);
     const workspaceUIState = await loadWorkspaceUIState(rootPath);
-    const label = config.name || (rootPath.split(/[/\\]/).filter(Boolean).pop() ?? "Workspace");
+    const label =
+      config.name ||
+      (rootPath.split(/[/\\]/).filter(Boolean).pop() ?? "Workspace");
     const doc: WorkspaceDoc = {
       type: "workspace",
       id: nextDocId(),
@@ -3047,7 +3089,12 @@ async function openWorkspaceTab(path?: string): Promise<void> {
       workspaceUIState,
     };
     currentWorkspace = doc;
-    addRecent({ path: rootPath, kind: "workspace", label, lastOpened: Date.now() });
+    addRecent({
+      path: rootPath,
+      kind: "workspace",
+      label,
+      lastOpened: Date.now(),
+    });
     showWorkspaceView();
     appendStatus(`Opened workspace ${rootPath}`);
     showToast("Opened workspace");
@@ -3082,7 +3129,9 @@ function showWorkspaceView(): void {
 
   renderWorkspaceView();
   const w = currentWorkspace;
-  const diagramContainer = workspacePanelEl.querySelector(".workspace-diagram-container");
+  const diagramContainer = workspacePanelEl.querySelector(
+    ".workspace-diagram-container"
+  );
   if (
     diagramContainer &&
     diagramPanelEl &&
@@ -3290,7 +3339,12 @@ async function openDiagramTab(path?: string): Promise<void> {
     documents.push(doc);
     activeDocIndex = documents.length - 1;
     showEditor();
-    addRecent({ path: targetPath, kind: "diagram", label, lastOpened: Date.now() });
+    addRecent({
+      path: targetPath,
+      kind: "diagram",
+      label,
+      lastOpened: Date.now(),
+    });
     appendStatus(`Opened ${targetPath}`);
     showToast("Opened");
   } catch (e) {
@@ -3328,7 +3382,11 @@ function updateEditorContentVisibility(): void {
       diagramPanelEl.style.display = "";
     } else {
       diagramPanelEl.style.display = "none";
-      if (diagramPanelEl.parentNode && editorContentEl && diagramPanelEl.parentNode !== editorContentEl) {
+      if (
+        diagramPanelEl.parentNode &&
+        editorContentEl &&
+        diagramPanelEl.parentNode !== editorContentEl
+      ) {
         editorContentEl.appendChild(diagramPanelEl);
       }
     }
@@ -3342,19 +3400,37 @@ function renderWorkspaceView(): void {
 
   const existingSidebar = workspacePanelEl.querySelector(".workspace-sidebar");
   if (existingSidebar) {
-    const catalogAcc = workspacePanelEl.querySelector(".workspace-accordion-catalog");
-    const diagramsAcc = workspacePanelEl.querySelector(".workspace-accordion-diagrams");
-    const settingsAcc = workspacePanelEl.querySelector(".workspace-accordion-settings");
-    const catalogContentEl = catalogAcc?.querySelector(".workspace-accordion-content");
-    const diagramsContentEl = diagramsAcc?.querySelector(".workspace-accordion-content");
+    const catalogAcc = workspacePanelEl.querySelector(
+      ".workspace-accordion-catalog"
+    );
+    const diagramsAcc = workspacePanelEl.querySelector(
+      ".workspace-accordion-diagrams"
+    );
+    const settingsAcc = workspacePanelEl.querySelector(
+      ".workspace-accordion-settings"
+    );
+    const catalogContentEl = catalogAcc?.querySelector(
+      ".workspace-accordion-content"
+    );
+    const diagramsContentEl = diagramsAcc?.querySelector(
+      ".workspace-accordion-content"
+    );
     const prev = w.workspaceUIState ?? {};
     w.workspaceUIState = {
-      catalogOpen: catalogAcc?.classList.contains("open") ?? prev.catalogOpen ?? true,
-      diagramsOpen: diagramsAcc?.classList.contains("open") ?? prev.diagramsOpen ?? true,
-      settingsOpen: settingsAcc?.classList.contains("open") ?? prev.settingsOpen ?? false,
-      sidebarScrollTop: (existingSidebar as HTMLElement).scrollTop ?? prev.sidebarScrollTop,
-      catalogContentScrollTop: (catalogContentEl as HTMLElement)?.scrollTop ?? prev.catalogContentScrollTop,
-      diagramsContentScrollTop: (diagramsContentEl as HTMLElement)?.scrollTop ?? prev.diagramsContentScrollTop,
+      catalogOpen:
+        catalogAcc?.classList.contains("open") ?? prev.catalogOpen ?? true,
+      diagramsOpen:
+        diagramsAcc?.classList.contains("open") ?? prev.diagramsOpen ?? true,
+      settingsOpen:
+        settingsAcc?.classList.contains("open") ?? prev.settingsOpen ?? false,
+      sidebarScrollTop:
+        (existingSidebar as HTMLElement).scrollTop ?? prev.sidebarScrollTop,
+      catalogContentScrollTop:
+        (catalogContentEl as HTMLElement)?.scrollTop ??
+        prev.catalogContentScrollTop,
+      diagramsContentScrollTop:
+        (diagramsContentEl as HTMLElement)?.scrollTop ??
+        prev.diagramsContentScrollTop,
     };
     saveWorkspaceUIState(w.rootPath, w.workspaceUIState).catch(() => {});
   }
@@ -3372,7 +3448,8 @@ function renderWorkspaceView(): void {
   sidebar.className = "workspace-sidebar";
 
   const catalogAccordion = document.createElement("div");
-  catalogAccordion.className = "workspace-accordion workspace-accordion-catalog";
+  catalogAccordion.className =
+    "workspace-accordion workspace-accordion-catalog";
   const catalogHeader = document.createElement("button");
   catalogHeader.type = "button";
   catalogHeader.className = "workspace-accordion-header";
@@ -3393,7 +3470,7 @@ function renderWorkspaceView(): void {
     deleteBtn.type = "button";
     deleteBtn.className = "workspace-catalog-item-delete";
     deleteBtn.title = "Remove from catalog";
-    deleteBtn.innerHTML = "×";
+    deleteBtn.innerHTML = TRASH_ICON_SVG;
     deleteBtn.onclick = (e) => {
       e.stopPropagation();
       confirmRemoveCatalogTable(w, t.id, t.name).catch(() => {});
@@ -3419,7 +3496,8 @@ function renderWorkspaceView(): void {
   sidebar.appendChild(catalogAccordion);
 
   const diagramsAccordion = document.createElement("div");
-  diagramsAccordion.className = "workspace-accordion workspace-accordion-diagrams";
+  diagramsAccordion.className =
+    "workspace-accordion workspace-accordion-diagrams";
   const diagramsHeader = document.createElement("button");
   diagramsHeader.type = "button";
   diagramsHeader.className = "workspace-accordion-header";
@@ -3431,11 +3509,27 @@ function renderWorkspaceView(): void {
   diagramsList.className = "workspace-diagrams-list";
   loadWorkspaceDiagramFiles(w).then((files) => {
     files.forEach((filename) => {
-      const row = document.createElement("button");
-      row.type = "button";
+      const row = document.createElement("div");
       row.className = "workspace-diagram-item";
-      row.textContent = filename;
-      row.onclick = () => openWorkspaceDiagramFile(w, filename);
+      const label = document.createElement("span");
+      label.className = "workspace-diagram-item-label";
+      label.textContent = filename;
+      row.appendChild(label);
+      const deleteBtn = document.createElement("button");
+      deleteBtn.type = "button";
+      deleteBtn.className = "workspace-diagram-item-delete";
+      deleteBtn.title = "Delete diagram";
+      deleteBtn.innerHTML = TRASH_ICON_SVG;
+      deleteBtn.onclick = (e) => {
+        e.stopPropagation();
+        confirmDeleteDiagram(w, filename);
+      };
+      row.appendChild(deleteBtn);
+      row.onclick = (e) => {
+        if (!(e.target as Element).closest(".workspace-diagram-item-delete")) {
+          openWorkspaceDiagramFile(w, filename);
+        }
+      };
       row.addEventListener("contextmenu", (e) => {
         e.preventDefault();
         showDiagramListContextMenu(e, w, filename);
@@ -3466,7 +3560,8 @@ function renderWorkspaceView(): void {
   sidebar.appendChild(diagramsAccordion);
 
   const settingsAccordion = document.createElement("div");
-  settingsAccordion.className = "workspace-accordion workspace-accordion-settings";
+  settingsAccordion.className =
+    "workspace-accordion workspace-accordion-settings";
   const settingsHeader = document.createElement("button");
   settingsHeader.type = "button";
   settingsHeader.className = "workspace-accordion-header";
@@ -3497,13 +3592,18 @@ function renderWorkspaceView(): void {
   autoSaveCheckbox.checked = w.autoSaveDiagrams ?? false;
   autoSaveLabel.appendChild(autoSaveCheckbox);
   const autoSaveText = document.createElement("span");
-  autoSaveText.textContent = "Auto-save diagrams (within 5 seconds of changes)";
+  autoSaveText.textContent = "Auto-save diagrams";
   autoSaveLabel.appendChild(autoSaveText);
   const saveSettingsBtn = document.createElement("button");
   saveSettingsBtn.type = "button";
   saveSettingsBtn.textContent = "Save";
   saveSettingsBtn.onclick = () =>
-    saveWorkspaceSettings(w, nameInput.value, descInput.value, autoSaveCheckbox.checked);
+    saveWorkspaceSettings(
+      w,
+      nameInput.value,
+      descInput.value,
+      autoSaveCheckbox.checked
+    );
   settingsContent.appendChild(nameLabel);
   settingsContent.appendChild(nameInput);
   settingsContent.appendChild(descLabel);
@@ -3564,10 +3664,16 @@ function renderWorkspaceView(): void {
     if (typeof ui.sidebarScrollTop === "number" && ui.sidebarScrollTop >= 0) {
       sidebar.scrollTop = ui.sidebarScrollTop;
     }
-    if (typeof ui.catalogContentScrollTop === "number" && ui.catalogContentScrollTop >= 0) {
+    if (
+      typeof ui.catalogContentScrollTop === "number" &&
+      ui.catalogContentScrollTop >= 0
+    ) {
       catalogContent.scrollTop = ui.catalogContentScrollTop;
     }
-    if (typeof ui.diagramsContentScrollTop === "number" && ui.diagramsContentScrollTop >= 0) {
+    if (
+      typeof ui.diagramsContentScrollTop === "number" &&
+      ui.diagramsContentScrollTop >= 0
+    ) {
       diagramsContent.scrollTop = ui.diagramsContentScrollTop;
     }
   };
@@ -3641,7 +3747,9 @@ function reattachWorkspaceDiagramPanel(): void {
   if (doc?.type !== "workspace" || !workspacePanelEl || !diagramPanelEl) return;
   const w = doc as WorkspaceDoc;
   if (w.innerDiagramTabs.length === 0 || w.activeInnerDiagramIndex < 0) return;
-  const diagramContainer = workspacePanelEl.querySelector(".workspace-diagram-container");
+  const diagramContainer = workspacePanelEl.querySelector(
+    ".workspace-diagram-container"
+  );
   if (diagramContainer && diagramPanelEl.parentNode !== diagramContainer) {
     diagramContainer.appendChild(diagramPanelEl);
     diagramPanelEl.style.display = "";
@@ -3742,7 +3850,9 @@ async function openWorkspaceDiagramFile(
 async function newWorkspaceDiagram(w: WorkspaceDoc): Promise<void> {
   const suggested =
     "diagram" +
-    (w.innerDiagramTabs.length > 0 ? String(w.innerDiagramTabs.length + 1) : "");
+    (w.innerDiagramTabs.length > 0
+      ? String(w.innerDiagramTabs.length + 1)
+      : "");
   const nameInput = window.prompt("Diagram name?", suggested);
   const baseName = (nameInput?.trim() && nameInput.trim()) || "diagram";
   let filename = sanitizeDiagramFilename(baseName);
@@ -3779,7 +3889,10 @@ async function newWorkspaceDiagram(w: WorkspaceDoc): Promise<void> {
     appendStatus(`Created ${filename}`);
     showToast("New diagram");
   } catch (e) {
-    appendStatus(`Saved diagram to catalog; file write failed: ${(e as Error).message}`, "error");
+    appendStatus(
+      `Saved diagram to catalog; file write failed: ${(e as Error).message}`,
+      "error"
+    );
     showToast("New diagram (save to disk failed)");
   }
 }
@@ -3788,11 +3901,7 @@ function switchWorkspaceInnerTab(w: WorkspaceDoc, index: number): void {
   if (index === w.activeInnerDiagramIndex) return;
   persistViewportToStore();
   const leavingInner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
-  if (
-    leavingInner &&
-    w.autoSaveDiagrams &&
-    leavingInner.store.isDirty()
-  ) {
+  if (leavingInner && w.autoSaveDiagrams && leavingInner.store.isDirty()) {
     const path = leavingInner.path;
     const diagram = leavingInner.store.getDiagram();
     bridge
@@ -3812,7 +3921,10 @@ function switchWorkspaceInnerTab(w: WorkspaceDoc, index: number): void {
   reattachWorkspaceDiagramPanel();
 }
 
-async function closeWorkspaceInnerTab(w: WorkspaceDoc, index: number): Promise<void> {
+async function closeWorkspaceInnerTab(
+  w: WorkspaceDoc,
+  index: number
+): Promise<void> {
   const inner = w.innerDiagramTabs[index];
   if (!inner) return;
   if (inner.store.isDirty()) {
@@ -3821,7 +3933,10 @@ async function closeWorkspaceInnerTab(w: WorkspaceDoc, index: number): Promise<v
     const choice = await confirmUnsavedChanges();
     if (choice === "cancel") return;
     if (choice === "save") {
-      await bridge.saveFile(inner.path, JSON.stringify(inner.store.getDiagram()));
+      await bridge.saveFile(
+        inner.path,
+        JSON.stringify(inner.store.getDiagram())
+      );
       inner.store.clearDirty();
     }
   }
@@ -3846,7 +3961,11 @@ async function saveWorkspaceSettings(
   w.name = name;
   w.description = description;
   w.autoSaveDiagrams = autoSaveDiagrams;
-  await saveWorkspaceConfig(w.rootPath, { name, description, autoSaveDiagrams });
+  await saveWorkspaceConfig(w.rootPath, {
+    name,
+    description,
+    autoSaveDiagrams,
+  });
   w.label = name || w.label;
   refreshTabStrip();
   showToast("Settings saved");
@@ -3857,9 +3976,9 @@ function openCatalogTableEditor(w: WorkspaceDoc, catalogId: string): void {
   if (!catalogEntry) return;
   for (let i = 0; i < w.innerDiagramTabs.length; i++) {
     const tab = w.innerDiagramTabs[i];
-    const table = tab.store.getDiagram().tables.find(
-      (t) => t.catalogTableId === catalogId
-    );
+    const table = tab.store
+      .getDiagram()
+      .tables.find((t) => t.catalogTableId === catalogId);
     if (table) {
       w.activeInnerDiagramIndex = i;
       bindActiveTab();
@@ -3919,8 +4038,10 @@ async function getDiagramsUsingCatalogTable(
       try {
         const raw = await bridge.loadFile(fullPath);
         const d = JSON.parse(raw) as Diagram;
-        const used = d.tables?.some((t) => t.catalogTableId === catalogId) ?? false;
-        if (used) namesFromFiles.push(filename.replace(/\.diagram$/i, "") || "Diagram");
+        const used =
+          d.tables?.some((t) => t.catalogTableId === catalogId) ?? false;
+        if (used)
+          namesFromFiles.push(filename.replace(/\.diagram$/i, "") || "Diagram");
       } catch {
         // skip unreadable file
       }
@@ -3942,7 +4063,11 @@ async function confirmRemoveCatalogTable(
   const diagramNames = await getDiagramsUsingCatalogTable(w, catalogId);
   const usedInDiagrams = diagramNames.length > 0;
   const message = usedInDiagrams
-    ? `Table "${tableName}" is currently used in diagram${diagramNames.length === 1 ? "" : "s"} ${diagramNames.join(", ")}. Deleting this table will also remove it from all diagrams.`
+    ? `Table "${tableName}" is currently used in diagram${
+        diagramNames.length === 1 ? "" : "s"
+      } ${diagramNames.join(
+        ", "
+      )}. Deleting this table will also remove it from all diagrams.`
     : `Remove "${tableName}" from the catalog?`;
 
   const existing = document.querySelector(".modal-overlay");
@@ -3950,34 +4075,127 @@ async function confirmRemoveCatalogTable(
   const overlay = document.createElement("div");
   overlay.className = "modal-overlay";
   const panel = document.createElement("div");
-  panel.className = "modal-panel";
+  panel.className = "modal-panel modal-panel-confirm";
+
+  const headerDiv = document.createElement("div");
+  headerDiv.className = "modal-confirm-header";
+  const title = document.createElement("h2");
+  title.className = "modal-title";
+  title.textContent = "Delete table";
+  headerDiv.appendChild(title);
+  panel.appendChild(headerDiv);
+
+  const contentDiv = document.createElement("div");
+  contentDiv.className = "modal-confirm-content";
   const p = document.createElement("p");
   p.textContent = message;
-  p.style.margin = "0 0 1rem 0";
-  p.style.whiteSpace = "pre-wrap";
-  panel.appendChild(p);
-  const btnDiv = document.createElement("div");
-  btnDiv.style.display = "flex";
-  btnDiv.style.gap = "0.5rem";
-  btnDiv.style.justifyContent = "flex-end";
+  p.className = "modal-confirm-message";
+  contentDiv.appendChild(p);
+  panel.appendChild(contentDiv);
+
+  const footerDiv = document.createElement("div");
+  footerDiv.className = "modal-confirm-footer";
   const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
   cancelBtn.textContent = "Cancel";
   cancelBtn.onclick = () => overlay.remove();
   const deleteBtn = document.createElement("button");
+  deleteBtn.type = "button";
   deleteBtn.textContent = "Delete";
-  deleteBtn.className = "danger";
+  deleteBtn.className = "modal-confirm-delete-btn";
   deleteBtn.onclick = () => {
     overlay.remove();
     removeCatalogTable(w, catalogId);
   };
-  btnDiv.appendChild(cancelBtn);
-  btnDiv.appendChild(deleteBtn);
-  panel.appendChild(btnDiv);
+  footerDiv.appendChild(cancelBtn);
+  footerDiv.appendChild(deleteBtn);
+  panel.appendChild(footerDiv);
+
   overlay.appendChild(panel);
   document.body.appendChild(overlay);
 }
 
-async function removeCatalogTable(w: WorkspaceDoc, catalogId: string): Promise<void> {
+/** Show confirmation dialog, then delete the diagram file and close its tab if open. */
+function confirmDeleteDiagram(w: WorkspaceDoc, filename: string): void {
+  const message = `Delete diagram "${filename}"? This cannot be undone.`;
+
+  const existing = document.querySelector(".modal-overlay");
+  if (existing) existing.remove();
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  const panel = document.createElement("div");
+  panel.className = "modal-panel modal-panel-confirm";
+
+  const headerDiv = document.createElement("div");
+  headerDiv.className = "modal-confirm-header";
+  const title = document.createElement("h2");
+  title.className = "modal-title";
+  title.textContent = "Delete diagram";
+  headerDiv.appendChild(title);
+  panel.appendChild(headerDiv);
+
+  const contentDiv = document.createElement("div");
+  contentDiv.className = "modal-confirm-content";
+  const p = document.createElement("p");
+  p.textContent = message;
+  p.className = "modal-confirm-message";
+  contentDiv.appendChild(p);
+  panel.appendChild(contentDiv);
+
+  const footerDiv = document.createElement("div");
+  footerDiv.className = "modal-confirm-footer";
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.textContent = "Cancel";
+  cancelBtn.onclick = () => overlay.remove();
+  const deleteBtn = document.createElement("button");
+  deleteBtn.type = "button";
+  deleteBtn.textContent = "Delete";
+  deleteBtn.className = "modal-confirm-delete-btn";
+  deleteBtn.onclick = () => {
+    overlay.remove();
+    deleteDiagramFile(w, filename).catch((e) =>
+      showToast("Delete failed: " + (e as Error).message)
+    );
+  };
+  footerDiv.appendChild(cancelBtn);
+  footerDiv.appendChild(deleteBtn);
+  panel.appendChild(footerDiv);
+
+  overlay.appendChild(panel);
+  document.body.appendChild(overlay);
+}
+
+async function deleteDiagramFile(
+  w: WorkspaceDoc,
+  filename: string
+): Promise<void> {
+  if (!bridge.isBackendAvailable()) {
+    showToast("Backend not available");
+    return;
+  }
+  const fullPath = pathJoin(w.rootPath, filename);
+  const tabIndex = w.innerDiagramTabs.findIndex((t) => t.path === fullPath);
+  if (tabIndex >= 0) {
+    w.innerDiagramTabs.splice(tabIndex, 1);
+    if (w.activeInnerDiagramIndex >= w.innerDiagramTabs.length) {
+      w.activeInnerDiagramIndex = Math.max(0, w.innerDiagramTabs.length - 1);
+    } else if (tabIndex < w.activeInnerDiagramIndex) {
+      w.activeInnerDiagramIndex--;
+    }
+    bindActiveTab();
+  }
+  await bridge.removeFile(fullPath);
+  refreshTabStrip();
+  if (workspacePanelEl) renderWorkspaceView();
+  updateEditorContentVisibility();
+  appendStatus("Diagram deleted");
+}
+
+async function removeCatalogTable(
+  w: WorkspaceDoc,
+  catalogId: string
+): Promise<void> {
   const idx = w.catalogTables.findIndex((c) => c.id === catalogId);
   if (idx < 0) return;
   const openPaths = new Set(w.innerDiagramTabs.map((t) => t.path));
@@ -3997,7 +4215,9 @@ async function removeCatalogTable(w: WorkspaceDoc, catalogId: string): Promise<v
         try {
           const raw = await bridge.loadFile(fullPath);
           const d = JSON.parse(raw) as Diagram;
-          const tableToRemove = d.tables?.find((t) => t.catalogTableId === catalogId);
+          const tableToRemove = d.tables?.find(
+            (t) => t.catalogTableId === catalogId
+          );
           if (tableToRemove) {
             const tableId = tableToRemove.id;
             d.tables = (d.tables ?? []).filter((t) => t.id !== tableId);
@@ -4078,7 +4298,11 @@ function setupMenuBar(menuBar: HTMLElement): void {
     ["Open Diagram", () => openDiagramTab(), false],
     null,
     ["Save", () => saveDiagram().then((s) => s && showToast("Saved")), false],
-    ["Save As…", () => saveDiagramAs().then((s) => s && showToast("Saved")), false],
+    [
+      "Save As…",
+      () => saveDiagramAs().then((s) => s && showToast("Saved")),
+      false,
+    ],
     ["Close Diagram", () => closeActiveDiagram(), false],
     ["Close Workspace", () => closeWorkspaceTab(), false],
     ["Close All Diagrams", () => closeAllDiagramTabs(), false],
@@ -4143,7 +4367,8 @@ function setupMenuBar(menuBar: HTMLElement): void {
     b.type = "button";
     b.className = "menu-bar-dropdown-item";
     b.textContent = label;
-    if (label === "Workspace Settings") b.dataset.menuAction = "workspace-settings";
+    if (label === "Workspace Settings")
+      b.dataset.menuAction = "workspace-settings";
     b.onclick = () => {
       hideMenus();
       fn();
@@ -4162,63 +4387,132 @@ function setupMenuBar(menuBar: HTMLElement): void {
   toolsMenu.appendChild(toolsBtn);
   const toolsDropdown = document.createElement("div");
   toolsDropdown.className = "menu-bar-dropdown";
-  [
-    ["Import Tables", () => openAndImportSQL(), false],
-    ["Export", null, false],
-    ["Layout", null, false],
-  ].forEach((item) => {
-    const [label, fn, isSub] = item as [string, (() => void) | null, boolean];
-    if (label === "Export") {
-      const sub = document.createElement("div");
-      sub.className = "menu-bar-submenu";
-      sub.innerHTML = "<span class='menu-bar-submenu-label'>Export</span>";
-      ["SQL DDL", "PNG", "SVG", "Mermaid", "PlantUML"].forEach((exportLabel) => {
-        const subItem = document.createElement("button");
-        subItem.type = "button";
-        subItem.className = "menu-bar-dropdown-item";
-        subItem.textContent = exportLabel;
-        subItem.onclick = () => {
-          hideMenus();
-          if (exportLabel === "SQL DDL") exportPostgresSQL().catch((e) => showToast((e as Error).message));
-          else if (exportLabel === "PNG") exportPNG();
-          else if (exportLabel === "SVG") exportSVG();
-          else if (exportLabel === "Mermaid") exportMermaid().catch((e) => showToast((e as Error).message));
-          else if (exportLabel === "PlantUML") exportPlantUML().catch((e) => showToast((e as Error).message));
-        };
-        sub.appendChild(subItem);
-      });
-      toolsDropdown.appendChild(sub);
-      return;
-    }
-    if (label === "Layout") {
-      const sub = document.createElement("div");
-      sub.className = "menu-bar-submenu";
-      sub.innerHTML = "<span class='menu-bar-submenu-label'>Layout</span>";
-      ["Grid", "Hierarchical", "Force-directed"].forEach((layoutLabel) => {
-        const subItem = document.createElement("button");
-        subItem.type = "button";
-        subItem.className = "menu-bar-dropdown-item";
-        subItem.textContent = layoutLabel;
-        const layout = layoutLabel === "Force-directed" ? "force" : layoutLabel.toLowerCase().slice(0, 4) as "grid" | "hierarchical" | "force";
-        subItem.onclick = () => {
-          hideMenus();
-          store.applyLayout(layout);
-        };
-        sub.appendChild(subItem);
-      });
-      toolsDropdown.appendChild(sub);
-      return;
-    }
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "menu-bar-dropdown-item";
-    b.textContent = label;
-    b.onclick = () => {
+
+  const importItem = document.createElement("button");
+  importItem.type = "button";
+  importItem.className = "menu-bar-dropdown-item";
+  importItem.textContent = "Import Tables";
+  importItem.onclick = () => {
+    hideMenus();
+    openAndImportSQL();
+  };
+  toolsDropdown.appendChild(importItem);
+
+  const sep1 = document.createElement("div");
+  sep1.className = "menu-bar-sep";
+  toolsDropdown.appendChild(sep1);
+
+  const exportWrapper = document.createElement("div");
+  exportWrapper.className = "menu-bar-submenu-wrapper";
+  const exportRow = document.createElement("div");
+  exportRow.className = "menu-bar-submenu-row";
+  exportRow.textContent = "Export";
+  const exportArrow = document.createElement("span");
+  exportArrow.className = "menu-bar-submenu-arrow";
+  exportArrow.textContent = "\u25B8";
+  exportRow.appendChild(exportArrow);
+  const exportFlyout = document.createElement("div");
+  exportFlyout.className = "menu-bar-flyout";
+
+  const sqlDdlWrapper = document.createElement("div");
+  sqlDdlWrapper.className = "menu-bar-submenu-wrapper";
+  const sqlDdlRow = document.createElement("div");
+  sqlDdlRow.className = "menu-bar-submenu-row";
+  sqlDdlRow.textContent = "Export SQL DDL";
+  const sqlDdlArrow = document.createElement("span");
+  sqlDdlArrow.className = "menu-bar-submenu-arrow";
+  sqlDdlArrow.textContent = "\u25B8";
+  sqlDdlRow.appendChild(sqlDdlArrow);
+  const sqlDdlFlyout = document.createElement("div");
+  sqlDdlFlyout.className = "menu-bar-flyout";
+
+  const bigQueryItem = document.createElement("button");
+  bigQueryItem.type = "button";
+  bigQueryItem.className = "menu-bar-dropdown-item";
+  bigQueryItem.textContent = "Export BigQuery DDL";
+  bigQueryItem.onclick = () => {
+    hideMenus();
+    exportBigQuerySQL().catch((e) => showToast((e as Error).message));
+  };
+  sqlDdlFlyout.appendChild(bigQueryItem);
+  const postgresItem = document.createElement("button");
+  postgresItem.type = "button";
+  postgresItem.className = "menu-bar-dropdown-item";
+  postgresItem.textContent = "Export PostgreSQL DDL";
+  postgresItem.onclick = () => {
+    hideMenus();
+    exportPostgresSQL().catch((e) => showToast((e as Error).message));
+  };
+  sqlDdlFlyout.appendChild(postgresItem);
+  sqlDdlWrapper.appendChild(sqlDdlRow);
+  sqlDdlWrapper.appendChild(sqlDdlFlyout);
+  exportFlyout.appendChild(sqlDdlWrapper);
+
+  const exportItems: [string, () => void][] = [
+    ["Export as PNG", () => exportPNG()],
+    ["Export as SVG", () => exportSVG()],
+    [
+      "Export in Mermaid format",
+      () =>
+        exportMermaid().catch((e) => showToast((e as Error).message)),
+    ],
+    [
+      "Export in PlantUML format",
+      () =>
+        exportPlantUML().catch((e) => showToast((e as Error).message)),
+    ],
+  ];
+  exportItems.forEach(([exportLabel, fn]) => {
+    const subItem = document.createElement("button");
+    subItem.type = "button";
+    subItem.className = "menu-bar-dropdown-item";
+    subItem.textContent = exportLabel;
+    subItem.onclick = () => {
       hideMenus();
-      if (fn) fn();
+      fn();
     };
-    toolsDropdown.appendChild(b);
+    exportFlyout.appendChild(subItem);
   });
+
+  exportWrapper.appendChild(exportRow);
+  exportWrapper.appendChild(exportFlyout);
+  toolsDropdown.appendChild(exportWrapper);
+
+  const sep2 = document.createElement("div");
+  sep2.className = "menu-bar-sep";
+  toolsDropdown.appendChild(sep2);
+
+  const layoutWrapper = document.createElement("div");
+  layoutWrapper.className = "menu-bar-submenu-wrapper";
+  const layoutRow = document.createElement("div");
+  layoutRow.className = "menu-bar-submenu-row";
+  layoutRow.textContent = "Layout";
+  const layoutArrow = document.createElement("span");
+  layoutArrow.className = "menu-bar-submenu-arrow";
+  layoutArrow.textContent = "\u25B8";
+  layoutRow.appendChild(layoutArrow);
+  const layoutFlyout = document.createElement("div");
+  layoutFlyout.className = "menu-bar-flyout";
+  const layoutItems: [string, "grid" | "hierarchical" | "force"][] = [
+    ["Grid", "grid"],
+    ["Hierarchical", "hierarchical"],
+    ["Force-directed", "force"],
+  ];
+  layoutItems.forEach(([layoutLabel, layout]) => {
+    const subItem = document.createElement("button");
+    subItem.type = "button";
+    subItem.className = "menu-bar-dropdown-item";
+    subItem.textContent = layoutLabel;
+    subItem.onclick = () => {
+      hideMenus();
+      store.applyLayout(layout);
+    };
+    layoutFlyout.appendChild(subItem);
+  });
+  layoutWrapper.appendChild(layoutRow);
+  layoutWrapper.appendChild(layoutFlyout);
+  toolsDropdown.appendChild(layoutWrapper);
+
   toolsMenu.appendChild(toolsDropdown);
   menuBar.appendChild(toolsMenu);
 
@@ -4228,7 +4522,9 @@ function setupMenuBar(menuBar: HTMLElement): void {
 }
 
 function hideMenus(): void {
-  rootContainer.querySelectorAll(".menu-bar-item.open").forEach((el) => el.classList.remove("open"));
+  rootContainer
+    .querySelectorAll(".menu-bar-item.open")
+    .forEach((el) => el.classList.remove("open"));
 }
 
 function toggleMenu(menuItem: HTMLElement): void {
@@ -4260,7 +4556,9 @@ async function syncTableToCatalogAndDiagrams(tableId: string): Promise<void> {
   const d = inner.store.getDiagram();
   const table = d.tables.find((t) => t.id === tableId);
   if (!table?.catalogTableId) return;
-  const catalogEntry = w.catalogTables.find((c) => c.id === table.catalogTableId);
+  const catalogEntry = w.catalogTables.find(
+    (c) => c.id === table.catalogTableId
+  );
   if (!catalogEntry) return;
   catalogEntry.name = table.name;
   catalogEntry.fields = table.fields.map((f) => ({
@@ -4286,10 +4584,7 @@ async function syncTableToCatalogAndDiagrams(tableId: string): Promise<void> {
         primaryKey: cf.primaryKey,
       }));
       tab.store.replaceTableContent(otherTable.id, catalogEntry.name, fields);
-      await bridge.saveFile(
-        tab.path,
-        JSON.stringify(tab.store.getDiagram())
-      );
+      await bridge.saveFile(tab.path, JSON.stringify(tab.store.getDiagram()));
       tab.store.clearDirty();
     }
   }

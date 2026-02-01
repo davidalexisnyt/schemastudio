@@ -95,7 +95,7 @@ export interface RecentEntry {
 export interface WorkspaceConfig {
   name: string;
   description?: string;
-  /** When true, save diagrams within 5 seconds of a change. */
+  /** When true, save diagrams automatically. */
   autoSaveDiagrams?: boolean;
 }
 
