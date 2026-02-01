@@ -7,6 +7,7 @@ import type {
   RecentEntry,
   WorkspaceConfig,
   CatalogTable,
+  WorkspaceUIState,
 } from "./types";
 import { Store, createEmptyDiagram } from "./store";
 import { FIELD_TYPES, CARDINALITY_OPTIONS } from "./types";
@@ -59,11 +60,15 @@ let currentFilePath: string | null = null;
 let unsubscribeStore: (() => void) | null = null;
 /** Re-bind store subscription (call after bindActiveTab so render/undo/redo track the active store). */
 let bindStoreSubscription: (() => void) | null = null;
+/** Pending auto-save timeout; cleared when switching tabs or when save runs. */
+let autoSaveTimeoutId: ReturnType<typeof setTimeout> | null = null;
+const AUTO_SAVE_DELAY_MS = 5000;
 
 // --- App shell (landing vs editor, tabs) ---
 type ViewMode = "landing" | "editor";
 const WORKSPACE_CONFIG_FILE = "workspace.config.json";
 const TABLE_CATALOG_FILE = "table_catalog.json";
+const WORKSPACE_STATE_FILE = "workspace.state";
 
 type DiagramDoc = {
   type: "diagram";
@@ -88,6 +93,10 @@ type WorkspaceDoc = {
   catalogTables: CatalogTable[];
   innerDiagramTabs: InnerDiagramTab[];
   activeInnerDiagramIndex: number;
+  /** When true, auto-save diagrams within 5 seconds of a change. */
+  autoSaveDiagrams?: boolean;
+  /** Sidebar accordion open state and scroll; persisted in workspace.state. */
+  workspaceUIState?: WorkspaceUIState;
 };
 type Doc = DiagramDoc | WorkspaceDoc;
 const RECENT_KEY = "schemastudio-recent";
@@ -611,6 +620,9 @@ async function saveDiagram(): Promise<boolean> {
       (doc as DiagramDoc).label = path.split(/[/\\]/).pop() ?? "Untitled";
       addRecent({ path, kind: "diagram", label: (doc as DiagramDoc).label, lastOpened: Date.now() });
       refreshTabStrip();
+    } else if (doc && doc.type === "workspace") {
+      refreshTabStrip();
+      if (workspacePanelEl) renderWorkspaceView();
     }
     appendStatus(`Saved ${path}`);
     return true;
@@ -899,10 +911,43 @@ function setupToolbar(): void {
       unsubscribeStore();
       unsubscribeStore = null;
     }
+    if (autoSaveTimeoutId) {
+      clearTimeout(autoSaveTimeoutId);
+      autoSaveTimeoutId = null;
+    }
     unsubscribeStore = store.subscribe(() => {
       undoBtn.disabled = !store.canUndo();
       redoBtn.disabled = !store.canRedo();
       render();
+      const doc = getActiveDoc();
+      if (doc?.type === "workspace" && workspacePanelEl) {
+        const w = doc as WorkspaceDoc;
+        const inner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
+        if (inner && inner.store === store) updateWorkspaceInnerTabLabels();
+      }
+      if (
+        doc?.type === "workspace" &&
+        (doc as WorkspaceDoc).autoSaveDiagrams &&
+        store.isDirty()
+      ) {
+        const w = doc as WorkspaceDoc;
+        const inner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
+        if (inner && inner.store === store) {
+          if (autoSaveTimeoutId) clearTimeout(autoSaveTimeoutId);
+          autoSaveTimeoutId = setTimeout(() => {
+            autoSaveTimeoutId = null;
+            bridge
+              .saveFile(inner.path, JSON.stringify(store.getDiagram()))
+              .then(() => {
+                store.clearDirty();
+                refreshTabStrip();
+                if (workspacePanelEl) renderWorkspaceView();
+                appendStatus("Auto-saved");
+              })
+              .catch(() => showToast("Auto-save failed"));
+          }, AUTO_SAVE_DELAY_MS);
+        }
+      }
     });
   };
   bindStoreSubscription();
@@ -1941,10 +1986,7 @@ function setupCanvas(): void {
       showContextMenu(e.clientX, e.clientY, [
         {
           label: "Add Table",
-          fn: () => {
-            store.addTable(pt.x, pt.y);
-            render();
-          },
+          fn: () => addTableToCurrentDiagram(pt.x, pt.y),
         },
         {
           label: "Add Note",
@@ -1992,7 +2034,7 @@ function setupCanvas(): void {
       e.preventDefault();
       const x = (400 - pan.x) / zoom;
       const y = (200 - pan.y) / zoom;
-      store.addTable(x, y);
+      addTableToCurrentDiagram(x, y);
     }
     if (e.key === "o" && e.ctrlKey) {
       e.preventDefault();
@@ -2911,6 +2953,31 @@ async function saveTableCatalog(
   );
 }
 
+async function loadWorkspaceUIState(rootPath: string): Promise<WorkspaceUIState> {
+  if (!bridge.isBackendAvailable()) return {};
+  try {
+    const raw = await bridge.loadFile(pathJoin(rootPath, WORKSPACE_STATE_FILE));
+    return JSON.parse(raw) as WorkspaceUIState;
+  } catch {
+    return {};
+  }
+}
+
+async function saveWorkspaceUIState(
+  rootPath: string,
+  state: WorkspaceUIState
+): Promise<void> {
+  if (!bridge.isBackendAvailable()) return;
+  try {
+    await bridge.saveFile(
+      pathJoin(rootPath, WORKSPACE_STATE_FILE),
+      JSON.stringify(state, null, 2)
+    );
+  } catch {
+    // ignore
+  }
+}
+
 async function newWorkspaceTab(): Promise<void> {
   if (!bridge.isBackendAvailable()) {
     showToast("Backend not available (run in Wails)");
@@ -2919,7 +2986,7 @@ async function newWorkspaceTab(): Promise<void> {
   try {
     const rootPath = await bridge.openDirectoryDialog("Choose workspace folder");
     if (!rootPath) return;
-    const config: WorkspaceConfig = { name: "New Workspace", description: "" };
+    const config: WorkspaceConfig = { name: "New Workspace", description: "", autoSaveDiagrams: false };
     await saveWorkspaceConfig(rootPath, config);
     await saveTableCatalog(rootPath, []);
     const label = rootPath.split(/[/\\]/).filter(Boolean).pop() ?? "Workspace";
@@ -2933,6 +3000,8 @@ async function newWorkspaceTab(): Promise<void> {
       catalogTables: [],
       innerDiagramTabs: [],
       activeInnerDiagramIndex: -1,
+      autoSaveDiagrams: config.autoSaveDiagrams ?? false,
+      workspaceUIState: { catalogOpen: true, diagramsOpen: true, settingsOpen: false },
     };
     currentWorkspace = doc;
     addRecent({ path: rootPath, kind: "workspace", label, lastOpened: Date.now() });
@@ -2962,6 +3031,7 @@ async function openWorkspaceTab(path?: string): Promise<void> {
   try {
     const config = await loadWorkspaceConfig(rootPath);
     const catalogTables = await loadTableCatalog(rootPath);
+    const workspaceUIState = await loadWorkspaceUIState(rootPath);
     const label = config.name || (rootPath.split(/[/\\]/).filter(Boolean).pop() ?? "Workspace");
     const doc: WorkspaceDoc = {
       type: "workspace",
@@ -2973,6 +3043,8 @@ async function openWorkspaceTab(path?: string): Promise<void> {
       catalogTables,
       innerDiagramTabs: [],
       activeInnerDiagramIndex: -1,
+      autoSaveDiagrams: config.autoSaveDiagrams ?? false,
+      workspaceUIState,
     };
     currentWorkspace = doc;
     addRecent({ path: rootPath, kind: "workspace", label, lastOpened: Date.now() });
@@ -3031,6 +3103,10 @@ function showWorkspaceView(): void {
 }
 
 function bindActiveTab(): void {
+  if (autoSaveTimeoutId) {
+    clearTimeout(autoSaveTimeoutId);
+    autoSaveTimeoutId = null;
+  }
   const doc = getActiveDoc();
   if (doc && doc.type === "diagram") {
     store = doc.store;
@@ -3263,7 +3339,26 @@ function renderWorkspaceView(): void {
   const doc = getActiveDoc();
   if (!workspacePanelEl || doc?.type !== "workspace") return;
   const w = doc as WorkspaceDoc;
-  // If diagram panel is inside workspace, move it out before clearing so it isn't destroyed
+
+  const existingSidebar = workspacePanelEl.querySelector(".workspace-sidebar");
+  if (existingSidebar) {
+    const catalogAcc = workspacePanelEl.querySelector(".workspace-accordion-catalog");
+    const diagramsAcc = workspacePanelEl.querySelector(".workspace-accordion-diagrams");
+    const settingsAcc = workspacePanelEl.querySelector(".workspace-accordion-settings");
+    const catalogContentEl = catalogAcc?.querySelector(".workspace-accordion-content");
+    const diagramsContentEl = diagramsAcc?.querySelector(".workspace-accordion-content");
+    const prev = w.workspaceUIState ?? {};
+    w.workspaceUIState = {
+      catalogOpen: catalogAcc?.classList.contains("open") ?? prev.catalogOpen ?? true,
+      diagramsOpen: diagramsAcc?.classList.contains("open") ?? prev.diagramsOpen ?? true,
+      settingsOpen: settingsAcc?.classList.contains("open") ?? prev.settingsOpen ?? false,
+      sidebarScrollTop: (existingSidebar as HTMLElement).scrollTop ?? prev.sidebarScrollTop,
+      catalogContentScrollTop: (catalogContentEl as HTMLElement)?.scrollTop ?? prev.catalogContentScrollTop,
+      diagramsContentScrollTop: (diagramsContentEl as HTMLElement)?.scrollTop ?? prev.diagramsContentScrollTop,
+    };
+    saveWorkspaceUIState(w.rootPath, w.workspaceUIState).catch(() => {});
+  }
+
   if (diagramPanelEl && workspacePanelEl.contains(diagramPanelEl)) {
     (editorContentEl ?? rootContainer).appendChild(diagramPanelEl);
   }
@@ -3277,7 +3372,7 @@ function renderWorkspaceView(): void {
   sidebar.className = "workspace-sidebar";
 
   const catalogAccordion = document.createElement("div");
-  catalogAccordion.className = "workspace-accordion";
+  catalogAccordion.className = "workspace-accordion workspace-accordion-catalog";
   const catalogHeader = document.createElement("button");
   catalogHeader.type = "button";
   catalogHeader.className = "workspace-accordion-header";
@@ -3301,7 +3396,7 @@ function renderWorkspaceView(): void {
     deleteBtn.innerHTML = "×";
     deleteBtn.onclick = (e) => {
       e.stopPropagation();
-      removeCatalogTable(w, t.id);
+      confirmRemoveCatalogTable(w, t.id, t.name).catch(() => {});
     };
     row.appendChild(deleteBtn);
     row.draggable = true;
@@ -3324,7 +3419,7 @@ function renderWorkspaceView(): void {
   sidebar.appendChild(catalogAccordion);
 
   const diagramsAccordion = document.createElement("div");
-  diagramsAccordion.className = "workspace-accordion";
+  diagramsAccordion.className = "workspace-accordion workspace-accordion-diagrams";
   const diagramsHeader = document.createElement("button");
   diagramsHeader.type = "button";
   diagramsHeader.className = "workspace-accordion-header";
@@ -3371,7 +3466,7 @@ function renderWorkspaceView(): void {
   sidebar.appendChild(diagramsAccordion);
 
   const settingsAccordion = document.createElement("div");
-  settingsAccordion.className = "workspace-accordion";
+  settingsAccordion.className = "workspace-accordion workspace-accordion-settings";
   const settingsHeader = document.createElement("button");
   settingsHeader.type = "button";
   settingsHeader.className = "workspace-accordion-header";
@@ -3391,14 +3486,29 @@ function renderWorkspaceView(): void {
   descInput.className = "workspace-settings-input";
   descInput.rows = 2;
   descInput.value = w.description ?? "";
+  const autoSaveLabel = document.createElement("label");
+  autoSaveLabel.style.display = "flex";
+  autoSaveLabel.style.alignItems = "center";
+  autoSaveLabel.style.gap = "0.5rem";
+  autoSaveLabel.style.marginBottom = "0.5rem";
+  autoSaveLabel.style.cursor = "pointer";
+  const autoSaveCheckbox = document.createElement("input");
+  autoSaveCheckbox.type = "checkbox";
+  autoSaveCheckbox.checked = w.autoSaveDiagrams ?? false;
+  autoSaveLabel.appendChild(autoSaveCheckbox);
+  const autoSaveText = document.createElement("span");
+  autoSaveText.textContent = "Auto-save diagrams (within 5 seconds of changes)";
+  autoSaveLabel.appendChild(autoSaveText);
   const saveSettingsBtn = document.createElement("button");
   saveSettingsBtn.type = "button";
   saveSettingsBtn.textContent = "Save";
-  saveSettingsBtn.onclick = () => saveWorkspaceSettings(w, nameInput.value, descInput.value);
+  saveSettingsBtn.onclick = () =>
+    saveWorkspaceSettings(w, nameInput.value, descInput.value, autoSaveCheckbox.checked);
   settingsContent.appendChild(nameLabel);
   settingsContent.appendChild(nameInput);
   settingsContent.appendChild(descLabel);
   settingsContent.appendChild(descInput);
+  settingsContent.appendChild(autoSaveLabel);
   settingsContent.appendChild(saveSettingsBtn);
   settingsAccordion.appendChild(settingsContent);
   sidebar.appendChild(settingsAccordion);
@@ -3412,10 +3522,13 @@ function renderWorkspaceView(): void {
   innerTabStrip.className = "workspace-inner-tabs";
   w.innerDiagramTabs.forEach((inner, i) => {
     const tab = document.createElement("div");
+    const dirty = inner.store.isDirty();
     tab.className =
       "workspace-inner-tab" +
-      (i === w.activeInnerDiagramIndex ? " workspace-inner-tab-active" : "");
-    tab.textContent = inner.label + (inner.store.isDirty() ? " •" : "");
+      (i === w.activeInnerDiagramIndex ? " workspace-inner-tab-active" : "") +
+      (dirty ? " workspace-inner-tab-dirty" : "");
+    tab.textContent = inner.label + (dirty ? " •" : "");
+    tab.title = dirty ? "Unsaved changes" : "";
     tab.onclick = () => switchWorkspaceInnerTab(w, i);
     const closeBtn = document.createElement("button");
     closeBtn.type = "button";
@@ -3442,13 +3555,85 @@ function renderWorkspaceView(): void {
   layout.appendChild(main);
   workspacePanelEl.appendChild(layout);
 
-  catalogHeader.onclick = () => catalogAccordion.classList.toggle("open");
-  diagramsHeader.onclick = () => diagramsAccordion.classList.toggle("open");
-  settingsHeader.onclick = () => settingsAccordion.classList.toggle("open");
-  catalogAccordion.classList.add("open");
-  diagramsAccordion.classList.add("open");
-
+  const ui = w.workspaceUIState ?? {};
+  if (ui.catalogOpen !== false) catalogAccordion.classList.add("open");
+  if (ui.diagramsOpen !== false) diagramsAccordion.classList.add("open");
+  if (ui.settingsOpen === true) settingsAccordion.classList.add("open");
   reattachWorkspaceDiagramPanel();
+  const applyScroll = (): void => {
+    if (typeof ui.sidebarScrollTop === "number" && ui.sidebarScrollTop >= 0) {
+      sidebar.scrollTop = ui.sidebarScrollTop;
+    }
+    if (typeof ui.catalogContentScrollTop === "number" && ui.catalogContentScrollTop >= 0) {
+      catalogContent.scrollTop = ui.catalogContentScrollTop;
+    }
+    if (typeof ui.diagramsContentScrollTop === "number" && ui.diagramsContentScrollTop >= 0) {
+      diagramsContent.scrollTop = ui.diagramsContentScrollTop;
+    }
+  };
+  requestAnimationFrame(() => {
+    requestAnimationFrame(applyScroll);
+  });
+  setTimeout(applyScroll, 120);
+
+  const persistSidebarState = (): void => {
+    w.workspaceUIState = {
+      catalogOpen: catalogAccordion.classList.contains("open"),
+      diagramsOpen: diagramsAccordion.classList.contains("open"),
+      settingsOpen: settingsAccordion.classList.contains("open"),
+      sidebarScrollTop: sidebar.scrollTop,
+      catalogContentScrollTop: catalogContent.scrollTop,
+      diagramsContentScrollTop: diagramsContent.scrollTop,
+    };
+    saveWorkspaceUIState(w.rootPath, w.workspaceUIState).catch(() => {});
+  };
+
+  let sidebarScrollTimeout: ReturnType<typeof setTimeout> | null = null;
+  const debouncedPersist = (): void => {
+    if (sidebarScrollTimeout) clearTimeout(sidebarScrollTimeout);
+    sidebarScrollTimeout = setTimeout(() => {
+      sidebarScrollTimeout = null;
+      persistSidebarState();
+    }, 150);
+  };
+  sidebar.addEventListener("scroll", debouncedPersist);
+  catalogContent.addEventListener("scroll", debouncedPersist);
+  diagramsContent.addEventListener("scroll", debouncedPersist);
+
+  catalogHeader.onclick = () => {
+    catalogAccordion.classList.toggle("open");
+    persistSidebarState();
+  };
+  diagramsHeader.onclick = () => {
+    diagramsAccordion.classList.toggle("open");
+    persistSidebarState();
+  };
+  settingsHeader.onclick = () => {
+    settingsAccordion.classList.toggle("open");
+    persistSidebarState();
+  };
+}
+
+/** Update inner diagram tab labels (dirty • and class) without rebuilding the whole workspace view. */
+function updateWorkspaceInnerTabLabels(): void {
+  const doc = getActiveDoc();
+  if (doc?.type !== "workspace" || !workspacePanelEl) return;
+  const w = doc as WorkspaceDoc;
+  const strip = workspacePanelEl.querySelector(".workspace-inner-tabs");
+  if (!strip || w.innerDiagramTabs.length !== strip.children.length) return;
+  w.innerDiagramTabs.forEach((inner, i) => {
+    const tab = strip.children[i] as HTMLElement;
+    if (!tab) return;
+    const dirty = inner.store.isDirty();
+    const closeBtn = tab.querySelector(".workspace-inner-tab-close");
+    tab.className =
+      "workspace-inner-tab" +
+      (i === w.activeInnerDiagramIndex ? " workspace-inner-tab-active" : "") +
+      (dirty ? " workspace-inner-tab-dirty" : "");
+    tab.textContent = inner.label + (dirty ? " •" : "");
+    tab.title = dirty ? "Unsaved changes" : "";
+    if (closeBtn) tab.appendChild(closeBtn);
+  });
 }
 
 function reattachWorkspaceDiagramPanel(): void {
@@ -3602,11 +3787,29 @@ async function newWorkspaceDiagram(w: WorkspaceDoc): Promise<void> {
 function switchWorkspaceInnerTab(w: WorkspaceDoc, index: number): void {
   if (index === w.activeInnerDiagramIndex) return;
   persistViewportToStore();
+  const leavingInner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
+  if (
+    leavingInner &&
+    w.autoSaveDiagrams &&
+    leavingInner.store.isDirty()
+  ) {
+    const path = leavingInner.path;
+    const diagram = leavingInner.store.getDiagram();
+    bridge
+      .saveFile(path, JSON.stringify(diagram))
+      .then(() => {
+        leavingInner.store.clearDirty();
+        refreshTabStrip();
+        if (workspacePanelEl) renderWorkspaceView();
+        appendStatus("Auto-saved");
+      })
+      .catch(() => showToast("Auto-save failed"));
+  }
   w.activeInnerDiagramIndex = index;
   bindActiveTab();
   refreshTabStrip();
-  updateEditorContentVisibility();
-  renderWorkspaceView();
+  updateWorkspaceInnerTabLabels();
+  reattachWorkspaceDiagramPanel();
 }
 
 async function closeWorkspaceInnerTab(w: WorkspaceDoc, index: number): Promise<void> {
@@ -3637,11 +3840,13 @@ async function closeWorkspaceInnerTab(w: WorkspaceDoc, index: number): Promise<v
 async function saveWorkspaceSettings(
   w: WorkspaceDoc,
   name: string,
-  description: string
+  description: string,
+  autoSaveDiagrams: boolean
 ): Promise<void> {
   w.name = name;
   w.description = description;
-  await saveWorkspaceConfig(w.rootPath, { name, description });
+  w.autoSaveDiagrams = autoSaveDiagrams;
+  await saveWorkspaceConfig(w.rootPath, { name, description, autoSaveDiagrams });
   w.label = name || w.label;
   refreshTabStrip();
   showToast("Settings saved");
@@ -3690,15 +3895,127 @@ function openCatalogTableEditor(w: WorkspaceDoc, catalogId: string): void {
   showTableEditor(newTable.id);
 }
 
+/** Collect diagram names (open tabs + closed files on disk) that contain a table with this catalogId. */
+async function getDiagramsUsingCatalogTable(
+  w: WorkspaceDoc,
+  catalogId: string
+): Promise<string[]> {
+  const openPaths = new Set(w.innerDiagramTabs.map((t) => t.path));
+  const namesFromOpenTabs = w.innerDiagramTabs
+    .filter((tab) => {
+      const d = tab.store.getDiagram();
+      return d.tables.some((t) => t.catalogTableId === catalogId);
+    })
+    .map((tab) => tab.label);
+
+  if (!bridge.isBackendAvailable()) return namesFromOpenTabs;
+
+  const namesFromFiles: string[] = [];
+  try {
+    const files = await loadWorkspaceDiagramFiles(w);
+    for (const filename of files) {
+      const fullPath = pathJoin(w.rootPath, filename);
+      if (openPaths.has(fullPath)) continue;
+      try {
+        const raw = await bridge.loadFile(fullPath);
+        const d = JSON.parse(raw) as Diagram;
+        const used = d.tables?.some((t) => t.catalogTableId === catalogId) ?? false;
+        if (used) namesFromFiles.push(filename.replace(/\.diagram$/i, "") || "Diagram");
+      } catch {
+        // skip unreadable file
+      }
+    }
+  } catch {
+    // fallback to open tabs only
+  }
+
+  const combined = [...new Set([...namesFromOpenTabs, ...namesFromFiles])];
+  return combined;
+}
+
+/** Show confirmation dialog, then remove catalog table and delete it from all diagrams that use it. */
+async function confirmRemoveCatalogTable(
+  w: WorkspaceDoc,
+  catalogId: string,
+  tableName: string
+): Promise<void> {
+  const diagramNames = await getDiagramsUsingCatalogTable(w, catalogId);
+  const usedInDiagrams = diagramNames.length > 0;
+  const message = usedInDiagrams
+    ? `Table "${tableName}" is currently used in diagram${diagramNames.length === 1 ? "" : "s"} ${diagramNames.join(", ")}. Deleting this table will also remove it from all diagrams.`
+    : `Remove "${tableName}" from the catalog?`;
+
+  const existing = document.querySelector(".modal-overlay");
+  if (existing) existing.remove();
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  const panel = document.createElement("div");
+  panel.className = "modal-panel";
+  const p = document.createElement("p");
+  p.textContent = message;
+  p.style.margin = "0 0 1rem 0";
+  p.style.whiteSpace = "pre-wrap";
+  panel.appendChild(p);
+  const btnDiv = document.createElement("div");
+  btnDiv.style.display = "flex";
+  btnDiv.style.gap = "0.5rem";
+  btnDiv.style.justifyContent = "flex-end";
+  const cancelBtn = document.createElement("button");
+  cancelBtn.textContent = "Cancel";
+  cancelBtn.onclick = () => overlay.remove();
+  const deleteBtn = document.createElement("button");
+  deleteBtn.textContent = "Delete";
+  deleteBtn.className = "danger";
+  deleteBtn.onclick = () => {
+    overlay.remove();
+    removeCatalogTable(w, catalogId);
+  };
+  btnDiv.appendChild(cancelBtn);
+  btnDiv.appendChild(deleteBtn);
+  panel.appendChild(btnDiv);
+  overlay.appendChild(panel);
+  document.body.appendChild(overlay);
+}
+
 async function removeCatalogTable(w: WorkspaceDoc, catalogId: string): Promise<void> {
   const idx = w.catalogTables.findIndex((c) => c.id === catalogId);
   if (idx < 0) return;
-  w.catalogTables.splice(idx, 1);
+  const openPaths = new Set(w.innerDiagramTabs.map((t) => t.path));
+
   for (const tab of w.innerDiagramTabs) {
     const d = tab.store.getDiagram();
     const table = d.tables.find((t) => t.catalogTableId === catalogId);
-    if (table) tab.store.setTableCatalogId(table.id, null);
+    if (table) tab.store.deleteTable(table.id);
   }
+
+  if (bridge.isBackendAvailable()) {
+    try {
+      const files = await loadWorkspaceDiagramFiles(w);
+      for (const filename of files) {
+        const fullPath = pathJoin(w.rootPath, filename);
+        if (openPaths.has(fullPath)) continue;
+        try {
+          const raw = await bridge.loadFile(fullPath);
+          const d = JSON.parse(raw) as Diagram;
+          const tableToRemove = d.tables?.find((t) => t.catalogTableId === catalogId);
+          if (tableToRemove) {
+            const tableId = tableToRemove.id;
+            d.tables = (d.tables ?? []).filter((t) => t.id !== tableId);
+            d.relationships = (d.relationships ?? []).filter(
+              (r) => r.sourceTableId !== tableId && r.targetTableId !== tableId
+            );
+            await bridge.saveFile(fullPath, JSON.stringify(d));
+          }
+        } catch {
+          // skip unreadable/unwritable file
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  w.catalogTables.splice(idx, 1);
   await saveTableCatalog(w.rootPath, w.catalogTables);
   refreshTabStrip();
   updateEditorContentVisibility();
@@ -3982,11 +4299,10 @@ async function syncTableToCatalogAndDiagrams(tableId: string): Promise<void> {
   renderWorkspaceView();
 }
 
-function addTableFromToolbar(): void {
+/** Add a table at (x, y). In a workspace, also add to catalog and link. */
+function addTableToCurrentDiagram(x: number, y: number): void {
   const doc = getActiveDoc();
   if (!doc) return;
-  const centerX = 200;
-  const centerY = 200;
   if (doc.type === "workspace") {
     const w = doc as WorkspaceDoc;
     const inner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
@@ -3994,7 +4310,7 @@ function addTableFromToolbar(): void {
       showToast("Open or create a diagram first");
       return;
     }
-    const table = inner.store.addTable(centerX, centerY);
+    const table = inner.store.addTable(x, y);
     const catalogId = nextCatalogId();
     const catalogEntry: CatalogTable = {
       id: catalogId,
@@ -4018,10 +4334,14 @@ function addTableFromToolbar(): void {
     renderWorkspaceView();
     appendStatus("Table added to diagram and catalog.");
   } else {
-    doc.store.addTable(centerX, centerY);
+    doc.store.addTable(x, y);
     render();
     appendStatus("Table added.");
   }
+}
+
+function addTableFromToolbar(): void {
+  addTableToCurrentDiagram(200, 200);
 }
 
 async function closeActiveDiagram(): Promise<void> {
@@ -4076,5 +4396,7 @@ export function init(el: HTMLElement): void {
   activeDocIndex = -1;
   currentWorkspace = null;
   editorInitialized = false;
+  // Prevent browser context menu app-wide; custom menus (canvas, diagram list) use their own handlers
+  document.addEventListener("contextmenu", (e) => e.preventDefault());
   showLanding();
 }

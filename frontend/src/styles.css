@@ -93,25 +93,62 @@ body {
   flex-shrink: 0;
   border-right: 1px solid var(--border);
   background: var(--surface);
-  overflow-y: auto;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
 
+/* Accordions: when open they take share of space (Catalog 60%, Diagrams 40%); when closed only header height */
 .workspace-accordion {
   border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 0 0 auto;
+}
+
+.workspace-accordion-catalog.open {
+  flex: 6 1 0;
+}
+
+.workspace-accordion-diagrams.open {
+  flex: 4 1 0;
+}
+
+.workspace-accordion-settings {
+  flex: 0 0 auto;
 }
 
 .workspace-accordion-header {
+  flex: 0 0 auto;
   width: 100%;
   padding: 0.5rem 0.75rem;
   border: none;
-  background: transparent;
+  background: var(--table-header-bg);
   color: var(--text);
   font-size: 0.875rem;
   font-weight: 600;
   text-align: left;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.workspace-accordion-header::after {
+  content: "";
+  width: 0.5rem;
+  height: 0.5rem;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg);
+  margin-left: auto;
+  transition: transform 0.15s ease;
+}
+
+.workspace-accordion.open .workspace-accordion-header::after {
+  transform: rotate(-135deg);
 }
 
 .workspace-accordion-header:hover {
@@ -119,12 +156,23 @@ body {
 }
 
 .workspace-accordion-content {
-  padding: 0.5rem;
-  display: none;
+  flex: 0 0 0;
+  padding: 0;
+  min-height: 0;
+  max-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .workspace-accordion.open .workspace-accordion-content {
-  display: block;
+  flex: 1 1 0;
+  max-height: none;
+  padding: 0.5rem;
+}
+
+/* Settings content sizes to full contents when expanded (no max-height) */
+.workspace-accordion-settings.open .workspace-accordion-content {
+  flex: 0 0 auto;
 }
 
 .workspace-catalog-list,
@@ -269,6 +317,10 @@ body {
 
 .workspace-inner-tab-active {
   background: var(--bg);
+}
+
+.workspace-inner-tab-dirty {
+  font-style: italic;
 }
 
 .workspace-inner-tab-close {

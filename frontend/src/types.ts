@@ -95,6 +95,8 @@ export interface RecentEntry {
 export interface WorkspaceConfig {
   name: string;
   description?: string;
+  /** When true, save diagrams within 5 seconds of a change. */
+  autoSaveDiagrams?: boolean;
 }
 
 /** Table in catalog (id is the stable catalog id; compatible with Table). */
@@ -112,4 +114,16 @@ export interface WorkspaceState {
   name: string;
   description?: string;
   catalogTables: CatalogTable[];
+}
+
+/** Persisted UI state for workspace sidebar (workspace.state file). */
+export interface WorkspaceUIState {
+  catalogOpen?: boolean;
+  diagramsOpen?: boolean;
+  settingsOpen?: boolean;
+  sidebarScrollTop?: number;
+  /** Scroll position inside the Table Catalog accordion content. */
+  catalogContentScrollTop?: number;
+  /** Scroll position inside the Diagrams accordion content. */
+  diagramsContentScrollTop?: number;
 }
