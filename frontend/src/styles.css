@@ -419,12 +419,23 @@ body {
   width: 100%;
 }
 
+.landing-title-block {
+  display: inline-block;
+  margin-bottom: 2rem;
+}
+
 .landing-title {
   font-size: 1.75rem;
   font-weight: 600;
-  margin: 0 0 2rem 0;
-  text-align: center;
+  margin: 0 0 0.25rem 0;
+  text-align: left;
   color: var(--text);
+}
+
+.landing-version {
+  font-size: 1rem;
+  color: var(--muted);
+  text-align: right;
 }
 
 .landing-section {
@@ -699,6 +710,10 @@ body {
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+}
+
+.toolbar .toolbar-theme-btn {
+  margin-left: auto;
 }
 
 .toolbar button,
@@ -1089,6 +1104,55 @@ body {
 .modal-panel-confirm .modal-confirm-delete-btn:hover {
   background: var(--danger);
   color: var(--surface);
+}
+
+/* Workspace settings modal – same 3-section layout as Edit Table */
+.modal-panel-workspace-settings {
+  display: flex;
+  flex-direction: column;
+  max-height: 85vh;
+  overflow: hidden;
+}
+
+.modal-panel-workspace-settings .modal-workspace-settings-header {
+  flex-shrink: 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  padding: 1rem 1.25rem;
+  margin: -1rem -1.25rem 0.25rem;
+}
+
+.modal-panel-workspace-settings .modal-workspace-settings-content {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  margin: 0 -0.25rem;
+  padding: 0 0.25rem;
+}
+
+.modal-panel-new-diagram .modal-workspace-settings-content {
+  padding-bottom: 1rem;
+}
+
+.modal-panel-workspace-settings .modal-workspace-settings-footer {
+  flex-shrink: 0;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  padding: 1rem 1.25rem;
+  margin: 1rem -1.25rem -1rem;
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.modal-panel-workspace-settings .modal-workspace-settings-footer button {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.875rem;
+  cursor: pointer;
 }
 
 .modal-panel-table-editor {

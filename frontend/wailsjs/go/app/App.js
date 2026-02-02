@@ -61,3 +61,7 @@ export function SaveBase64(arg1, arg2) {
 export function SaveFileDialog(arg1, arg2, arg3, arg4) {
   return window['go']['app']['App']['SaveFileDialog'](arg1, arg2, arg3, arg4);
 }
+
+export function Version() {
+  return window['go']['app']['App']['Version']();
+}

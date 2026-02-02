@@ -811,96 +811,8 @@ function setupToolbar(): void {
   redoBtn.onclick = () => store.redo();
   toolbar.appendChild(redoBtn);
 
-  const layoutDiv = document.createElement("div");
-  layoutDiv.className = "dropdown";
-  const layoutBtn = document.createElement("button");
-  layoutBtn.textContent = "Layout ▾";
-  layoutBtn.onclick = () => {
-    exportDiv.classList.remove("open");
-    importDiv.classList.remove("open");
-    layoutDiv.classList.toggle("open");
-  };
-  layoutDiv.appendChild(layoutBtn);
-  const layoutContent = document.createElement("div");
-  layoutContent.className = "dropdown-content";
-  ["grid", "hierarchical", "force"].forEach((l) => {
-    const b = document.createElement("button");
-    b.textContent = l.charAt(0).toUpperCase() + l.slice(1);
-    b.onclick = () => {
-      store.applyLayout(l as "grid" | "hierarchical" | "force");
-      layoutDiv.classList.remove("open");
-    };
-    layoutContent.appendChild(b);
-  });
-  layoutDiv.appendChild(layoutContent);
-  toolbar.appendChild(layoutDiv);
-
-  const exportDiv = document.createElement("div");
-  exportDiv.className = "dropdown";
-  const exportBtn = document.createElement("button");
-  exportBtn.textContent = "Export ▾";
-  exportBtn.onclick = () => {
-    layoutDiv.classList.remove("open");
-    importDiv.classList.remove("open");
-    exportDiv.classList.toggle("open");
-  };
-  exportDiv.appendChild(exportBtn);
-  const exportContent = document.createElement("div");
-  exportContent.className = "dropdown-content";
-  const exportItems = [
-    ["JSON", async () => exportJSON()],
-    ["SQL (PostgreSQL)", async () => exportPostgresSQL()],
-    ["SQL (BigQuery)", async () => exportBigQuerySQL()],
-    ["Mermaid", async () => exportMermaid()],
-    ["PNG", () => exportPNG()],
-    ["SVG", () => exportSVG()],
-  ];
-  exportItems.forEach(([label, fn]) => {
-    const b = document.createElement("button");
-    b.textContent = label as string;
-    b.onclick = async () => {
-      exportDiv.classList.remove("open");
-      try {
-        await (fn as () => void | Promise<void>)();
-      } catch (e) {
-        showToast((e as Error).message);
-      }
-    };
-    exportContent.appendChild(b);
-  });
-  exportDiv.appendChild(exportContent);
-  toolbar.appendChild(exportDiv);
-
-  const importDiv = document.createElement("div");
-  importDiv.className = "dropdown";
-  const importBtn = document.createElement("button");
-  importBtn.textContent = "Import ▾";
-  importBtn.onclick = () => {
-    layoutDiv.classList.remove("open");
-    exportDiv.classList.remove("open");
-    importDiv.classList.toggle("open");
-  };
-  importDiv.appendChild(importBtn);
-  const importContent = document.createElement("div");
-  importContent.className = "dropdown-content";
-  const importItems = [
-    ["JSON", () => openAndImportJSON()],
-    ["SQL", () => openAndImportSQL()],
-    ["Mermaid", () => openAndImportMermaid()],
-  ];
-  importItems.forEach(([label, fn]) => {
-    const b = document.createElement("button");
-    b.textContent = label as string;
-    b.onclick = () => {
-      importDiv.classList.remove("open");
-      (fn as () => void | Promise<void>)();
-    };
-    importContent.appendChild(b);
-  });
-  importDiv.appendChild(importContent);
-  toolbar.appendChild(importDiv);
-
   const themeBtn = document.createElement("button");
+  themeBtn.className = "toolbar-theme-btn";
   themeBtn.title = "Toggle dark/light theme";
   function updateThemeButton(): void {
     const theme = document.documentElement.getAttribute("data-theme") ?? "dark";
@@ -976,9 +888,9 @@ function setupToolbar(): void {
 
   document.body.addEventListener("click", (e) => {
     if (!(e.target as Element).closest(".dropdown")) {
-      layoutDiv.classList.remove("open");
-      exportDiv.classList.remove("open");
-      importDiv.classList.remove("open");
+      rootContainer.querySelectorAll(".toolbar .dropdown.open").forEach((el) => {
+        el.classList.remove("open");
+      });
     }
   });
 
@@ -2861,10 +2773,19 @@ function showLanding(): void {
   const wrap = document.createElement("div");
   wrap.className = "landing-wrap";
 
+  const titleBlock = document.createElement("div");
+  titleBlock.className = "landing-title-block";
   const title = document.createElement("h1");
   title.className = "landing-title";
   title.textContent = "Schema Studio";
-  wrap.appendChild(title);
+  titleBlock.appendChild(title);
+  const versionEl = document.createElement("div");
+  versionEl.className = "landing-version";
+  titleBlock.appendChild(versionEl);
+  wrap.appendChild(titleBlock);
+  bridge.getVersion().then((v) => {
+    versionEl.textContent = v ? `v${v}` : "";
+  });
 
   const startSection = document.createElement("div");
   startSection.className = "landing-section";
@@ -3551,9 +3472,7 @@ function renderWorkspaceView(): void {
   newDiagramBtn.onclick = () => {
     const doc = getActiveDoc();
     if (doc?.type !== "workspace") return;
-    newWorkspaceDiagram(doc as WorkspaceDoc).catch((e) =>
-      showToast("Failed: " + (e as Error).message)
-    );
+    newWorkspaceDiagram(doc as WorkspaceDoc);
   };
   diagramsContent.appendChild(newDiagramBtn);
   diagramsAccordion.appendChild(diagramsContent);
@@ -3847,14 +3766,73 @@ async function openWorkspaceDiagramFile(
   }
 }
 
-async function newWorkspaceDiagram(w: WorkspaceDoc): Promise<void> {
+function showNewDiagramModal(w: WorkspaceDoc): void {
   const suggested =
     "diagram" +
     (w.innerDiagramTabs.length > 0
       ? String(w.innerDiagramTabs.length + 1)
       : "");
-  const nameInput = window.prompt("Diagram name?", suggested);
-  const baseName = (nameInput?.trim() && nameInput.trim()) || "diagram";
+
+  const existing = document.querySelector(".modal-overlay");
+  if (existing) existing.remove();
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  const panel = document.createElement("div");
+  panel.className = "modal-panel modal-panel-workspace-settings modal-panel-new-diagram";
+
+  const headerDiv = document.createElement("div");
+  headerDiv.className = "modal-workspace-settings-header";
+  const title = document.createElement("h2");
+  title.className = "modal-title";
+  title.textContent = "New Diagram";
+  headerDiv.appendChild(title);
+  panel.appendChild(headerDiv);
+
+  const contentDiv = document.createElement("div");
+  contentDiv.className = "modal-workspace-settings-content";
+  const nameLabel = document.createElement("label");
+  nameLabel.textContent = "Diagram name";
+  nameLabel.htmlFor = "new-diagram-name";
+  contentDiv.appendChild(nameLabel);
+  const nameInput = document.createElement("input");
+  nameInput.id = "new-diagram-name";
+  nameInput.type = "text";
+  nameInput.value = suggested;
+  nameInput.className = "modal-input";
+  nameInput.placeholder = "e.g. diagram, my-schema";
+  contentDiv.appendChild(nameInput);
+  panel.appendChild(contentDiv);
+
+  const footerDiv = document.createElement("div");
+  footerDiv.className = "modal-workspace-settings-footer";
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.textContent = "Cancel";
+  cancelBtn.onclick = () => overlay.remove();
+  const createBtn = document.createElement("button");
+  createBtn.type = "button";
+  createBtn.textContent = "Create";
+  createBtn.onclick = () => {
+    const baseName = nameInput.value.trim() || "diagram";
+    overlay.remove();
+    createWorkspaceDiagramWithName(w, baseName).catch((e) =>
+      showToast("Failed: " + (e as Error).message)
+    );
+  };
+  footerDiv.appendChild(cancelBtn);
+  footerDiv.appendChild(createBtn);
+  panel.appendChild(footerDiv);
+
+  overlay.appendChild(panel);
+  document.body.appendChild(overlay);
+  nameInput.focus();
+  nameInput.select();
+}
+
+async function createWorkspaceDiagramWithName(
+  w: WorkspaceDoc,
+  baseName: string
+): Promise<void> {
   let filename = sanitizeDiagramFilename(baseName);
   try {
     const existing = await loadWorkspaceDiagramFiles(w);
@@ -3883,7 +3861,6 @@ async function newWorkspaceDiagram(w: WorkspaceDoc): Promise<void> {
   bindActiveTab();
   refreshTabStrip();
   updateEditorContentVisibility();
-  renderWorkspaceView();
   try {
     await bridge.saveFile(fullPath, JSON.stringify(newStore.getDiagram()));
     appendStatus(`Created ${filename}`);
@@ -3895,6 +3872,11 @@ async function newWorkspaceDiagram(w: WorkspaceDoc): Promise<void> {
     );
     showToast("New diagram (save to disk failed)");
   }
+  renderWorkspaceView();
+}
+
+function newWorkspaceDiagram(w: WorkspaceDoc): void {
+  showNewDiagramModal(w);
 }
 
 function switchWorkspaceInnerTab(w: WorkspaceDoc, index: number): void {
@@ -3969,6 +3951,82 @@ async function saveWorkspaceSettings(
   w.label = name || w.label;
   refreshTabStrip();
   showToast("Settings saved");
+}
+
+function showWorkspaceSettingsModal(w: WorkspaceDoc): void {
+  const existing = document.querySelector(".modal-overlay");
+  if (existing) existing.remove();
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  const panel = document.createElement("div");
+  panel.className = "modal-panel modal-panel-workspace-settings";
+
+  const headerDiv = document.createElement("div");
+  headerDiv.className = "modal-workspace-settings-header";
+  const title = document.createElement("h2");
+  title.className = "modal-title";
+  title.textContent = "Edit Workspace Settings";
+  headerDiv.appendChild(title);
+  const nameLabel = document.createElement("label");
+  nameLabel.textContent = "Name";
+  nameLabel.htmlFor = "workspace-settings-name";
+  headerDiv.appendChild(nameLabel);
+  const nameInput = document.createElement("input");
+  nameInput.id = "workspace-settings-name";
+  nameInput.type = "text";
+  nameInput.value = w.name;
+  nameInput.className = "modal-input";
+  headerDiv.appendChild(nameInput);
+  panel.appendChild(headerDiv);
+
+  const contentDiv = document.createElement("div");
+  contentDiv.className = "modal-workspace-settings-content";
+  const descLabel = document.createElement("label");
+  descLabel.textContent = "Description";
+  descLabel.htmlFor = "workspace-settings-desc";
+  contentDiv.appendChild(descLabel);
+  const descInput = document.createElement("textarea");
+  descInput.id = "workspace-settings-desc";
+  descInput.className = "modal-input modal-textarea";
+  descInput.rows = 3;
+  descInput.value = w.description ?? "";
+  contentDiv.appendChild(descInput);
+  const autoSaveLabel = document.createElement("label");
+  autoSaveLabel.className = "modal-checkbox-row";
+  autoSaveLabel.style.cursor = "pointer";
+  const autoSaveCheckbox = document.createElement("input");
+  autoSaveCheckbox.type = "checkbox";
+  autoSaveCheckbox.checked = w.autoSaveDiagrams ?? false;
+  autoSaveLabel.appendChild(autoSaveCheckbox);
+  const autoSaveText = document.createElement("span");
+  autoSaveText.textContent = " Auto-save diagrams (within 5 seconds of changes)";
+  autoSaveLabel.appendChild(autoSaveText);
+  contentDiv.appendChild(autoSaveLabel);
+  panel.appendChild(contentDiv);
+
+  const footerDiv = document.createElement("div");
+  footerDiv.className = "modal-workspace-settings-footer";
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.textContent = "Cancel";
+  cancelBtn.onclick = () => overlay.remove();
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "button";
+  saveBtn.textContent = "Save";
+  saveBtn.onclick = async () => {
+    const name = nameInput.value.trim();
+    const description = descInput.value.trim();
+    const autoSaveDiagrams = autoSaveCheckbox.checked;
+    overlay.remove();
+    await saveWorkspaceSettings(w, name, description, autoSaveDiagrams);
+    if (workspacePanelEl) renderWorkspaceView();
+  };
+  footerDiv.appendChild(cancelBtn);
+  footerDiv.appendChild(saveBtn);
+  panel.appendChild(footerDiv);
+
+  overlay.appendChild(panel);
+  document.body.appendChild(overlay);
 }
 
 function openCatalogTableEditor(w: WorkspaceDoc, catalogId: string): void {
@@ -4347,7 +4405,15 @@ function setupMenuBar(menuBar: HTMLElement): void {
   const editDropdown = document.createElement("div");
   editDropdown.className = "menu-bar-dropdown";
   [
-    ["Workspace Settings", () => {}, false],
+    [
+      "Workspace Settings",
+      () => {
+        const doc = getActiveDoc();
+        if (doc?.type === "workspace")
+          showWorkspaceSettingsModal(doc as WorkspaceDoc);
+      },
+      false,
+    ],
     null,
     ["Undo", () => store.undo(), false],
     ["Redo", () => store.redo(), false],

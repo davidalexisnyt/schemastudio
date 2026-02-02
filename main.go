@@ -11,11 +11,13 @@ import (
 	"schemastudio/internal/app"
 )
 
+const Version = "0.2.0"
+
 //go:embed all:frontend/dist
 var assets embed.FS
 
 func main() {
-	a := app.NewApp()
+	a := app.NewApp(Version)
 	err := wails.Run(&options.App{
 		Title:  "Schema Studio",
 		Width:  1280,

@@ -32,6 +32,7 @@ declare global {
           ImportMermaid(mermaidContent: string): Promise<string>;
           ExportMermaid(jsonContent: string): Promise<string>;
           ExportPlantUML(jsonContent: string): Promise<string>;
+          Version(): Promise<string>;
         };
       };
     };
@@ -157,4 +158,11 @@ export async function exportPlantUML(jsonContent: string): Promise<string> {
 
 export function isBackendAvailable(): boolean {
   return !!getApp();
+}
+
+export async function getVersion(): Promise<string> {
+  const app = getApp();
+  if (!app || !(app as { Version?: () => Promise<string> }).Version)
+    return "";
+  return (app as { Version: () => Promise<string> }).Version();
 }

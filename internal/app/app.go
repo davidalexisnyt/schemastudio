@@ -17,12 +17,19 @@ import (
 
 // App is the Wails-bound application for file I/O and export/import.
 type App struct {
-	ctx context.Context
+	ctx     context.Context
+	version string
 }
 
-// NewApp returns a new App. Call Startup with the Wails context before using dialogs.
-func NewApp() *App {
-	return &App{}
+// NewApp returns a new App. version is the application version (e.g. "0.2.0").
+// Call Startup with the Wails context before using dialogs.
+func NewApp(version string) *App {
+	return &App{version: version}
+}
+
+// Version returns the application version.
+func (a *App) Version() string {
+	return a.version
 }
 
 // Startup is called by Wails when the app starts; store context for dialogs.
