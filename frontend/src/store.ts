@@ -7,6 +7,7 @@ import type {
   Viewport,
 } from "./types";
 import { getTableWidth } from "./canvas";
+import { runForceDirectedLayout } from "./layout";
 
 const MAX_UNDO = 50;
 
@@ -437,6 +438,21 @@ export class Store {
   applyLayout(layout: "grid" | "hierarchical" | "force"): void {
     this.pushUndo();
     const tables = this.diagram.tables;
+    const relationships = this.diagram.relationships ?? [];
+
+    if (layout === "force") {
+      const positions = runForceDirectedLayout(tables, relationships);
+      for (const t of tables) {
+        const pos = positions.get(t.id);
+        if (pos) {
+          t.x = pos.x;
+          t.y = pos.y;
+        }
+      }
+      this.notify();
+      return;
+    }
+
     const HEADER_HEIGHT = 28;
     const ROW_HEIGHT = 22;
     const MIN_LAYOUT_GAP = 48;

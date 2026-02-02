@@ -12,7 +12,7 @@ const TABLE_CHAR_WIDTH = 6.5; // approximate px per character at 12px font (fiel
 
 export type TableSide = "left" | "right" | "top" | "bottom";
 
-function getTableHeight(table: Table): number {
+export function getTableHeight(table: Table): number {
   return HEADER_HEIGHT + table.fields.length * ROW_HEIGHT;
 }
 
