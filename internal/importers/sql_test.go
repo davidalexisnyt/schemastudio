@@ -17,24 +17,24 @@ CREATE TABLE posts (
   FOREIGN KEY (user_id) REFERENCES users(id)
 );
 `
-	d, err := ParseSQL(sql)
+	catalog, err := ParseSQL(sql)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(d.Tables) != 2 {
-		t.Errorf("expected 2 tables, got %d", len(d.Tables))
+	if len(catalog.Tables) != 2 {
+		t.Errorf("expected 2 tables, got %d", len(catalog.Tables))
 	}
-	if len(d.Relationships) != 1 {
-		t.Errorf("expected 1 relationship, got %d", len(d.Relationships))
+	if len(catalog.Relationships) != 1 {
+		t.Errorf("expected 1 relationship, got %d", len(catalog.Relationships))
 	}
 }
 
 func TestParseSQL_Empty(t *testing.T) {
-	d, err := ParseSQL("")
+	catalog, err := ParseSQL("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(d.Tables) != 0 {
-		t.Errorf("expected 0 tables, got %d", len(d.Tables))
+	if len(catalog.Tables) != 0 {
+		t.Errorf("expected 0 tables, got %d", len(catalog.Tables))
 	}
 }

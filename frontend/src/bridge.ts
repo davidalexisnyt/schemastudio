@@ -28,7 +28,8 @@ declare global {
             dataset: string,
             creationMode: string,
           ): Promise<string>;
-          ImportSQL(sqlContent: string): Promise<string>;
+          ImportSQL(sqlContent: string, importSource: string): Promise<string>;
+          ImportCSV(csvContent: string, importSource: string): Promise<string>;
           ImportMermaid(mermaidContent: string): Promise<string>;
           ExportMermaid(jsonContent: string): Promise<string>;
           ExportPlantUML(jsonContent: string): Promise<string>;
@@ -132,10 +133,22 @@ export async function exportBigQuery(
   return app.ExportBigQuery(jsonContent, project, dataset, creationMode);
 }
 
-export async function importSQL(sqlContent: string): Promise<string> {
+export async function importSQL(
+  sqlContent: string,
+  importSource: string
+): Promise<string> {
   const app = getApp();
   if (!app) throw new Error("Backend not available");
-  return app.ImportSQL(sqlContent);
+  return app.ImportSQL(sqlContent, importSource);
+}
+
+export async function importCSV(
+  csvContent: string,
+  importSource: string
+): Promise<string> {
+  const app = getApp();
+  if (!app) throw new Error("Backend not available");
+  return app.ImportCSV(csvContent, importSource);
 }
 
 export async function importMermaid(mermaidContent: string): Promise<string> {

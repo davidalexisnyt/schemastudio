@@ -13,6 +13,14 @@ type Diagram struct {
 	Viewport      *Viewport      `json:"viewport,omitempty"`
 }
 
+// TableCatalog is the result of an import (SQL, CSV, etc.). Used to populate
+// the workspace table catalog or a standalone diagram.
+type TableCatalog struct {
+	ImportSource   string         `json:"importSource"` // File name the catalog was imported from.
+	Tables         []Table        `json:"tables"`
+	Relationships   []Relationship `json:"relationships"`
+}
+
 // Table represents a table on the canvas.
 type Table struct {
 	ID     string  `json:"id"`

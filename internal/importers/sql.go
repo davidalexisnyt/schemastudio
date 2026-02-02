@@ -9,10 +9,11 @@ import (
 )
 
 // ParseSQL parses DDL (PostgreSQL-style CREATE TABLE with optional PRIMARY KEY/FOREIGN KEY)
-// and returns a Diagram. Table/field IDs are generated UUIDs; positions are on a grid.
-func ParseSQL(sql string) (schema.Diagram, error) {
-	d := schema.NewDiagram()
-	tableByName := make(map[string]int) // name -> index in d.Tables
+// and returns a TableCatalog. Table/field IDs are generated; positions are on a grid.
+// ImportSource is left empty; the caller should set it to the file name.
+func ParseSQL(sql string) (schema.TableCatalog, error) {
+	catalog := schema.TableCatalog{Tables: nil, Relationships: nil}
+	tableByName := make(map[string]int) // name -> index in catalog.Tables
 	tableOrder := []string{}
 	idGen := newIDGen()
 
@@ -69,8 +70,8 @@ func ParseSQL(sql string) (schema.Diagram, error) {
 					refTable := strings.TrimSpace(strings.Trim(fkMatch[2], `"`))
 					refCol := strings.TrimSpace(strings.Trim(fkMatch[3], `"`))
 					localFID := fieldByName[localCol]
-					if refIdx, ok := tableByName[refTable]; ok && localFID != "" && refIdx >= 0 && refIdx < len(d.Tables) {
-						refT := &d.Tables[refIdx]
+					if refIdx, ok := tableByName[refTable]; ok && localFID != "" && refIdx >= 0 && refIdx < len(catalog.Tables) {
+						refT := &catalog.Tables[refIdx]
 						var refFID string
 						for _, f := range refT.Fields {
 							if f.Name == refCol {
@@ -79,7 +80,7 @@ func ParseSQL(sql string) (schema.Diagram, error) {
 							}
 						}
 						if refFID != "" {
-							d.Relationships = append(d.Relationships, schema.Relationship{
+							catalog.Relationships = append(catalog.Relationships, schema.Relationship{
 								ID:            idGen.rel(),
 								SourceTableID: refT.ID,
 								SourceFieldID: refFID,
@@ -102,8 +103,8 @@ func ParseSQL(sql string) (schema.Diagram, error) {
 			t.Fields = append(t.Fields, schema.Field{ID: fID, Name: colName, Type: strings.ToLower(colType)})
 			fieldByName[colName] = fID
 		}
-		d.Tables = append(d.Tables, t)
-		tableByName[tblName] = len(d.Tables) - 1
+		catalog.Tables = append(catalog.Tables, t)
+		tableByName[tblName] = len(catalog.Tables) - 1
 		tableOrder = append(tableOrder, tblName)
 	}
 
@@ -111,14 +112,14 @@ func ParseSQL(sql string) (schema.Diagram, error) {
 	cols := 3
 	for i, name := range tableOrder {
 		idx, ok := tableByName[name]
-		if !ok || idx < 0 || idx >= len(d.Tables) {
+		if !ok || idx < 0 || idx >= len(catalog.Tables) {
 			continue
 		}
 		row, col := i/cols, i%cols
-		d.Tables[idx].X = float64(col * 320)
-		d.Tables[idx].Y = float64(row * 240)
+		catalog.Tables[idx].X = float64(col * 320)
+		catalog.Tables[idx].Y = float64(row * 240)
 	}
-	return d, nil
+	return catalog, nil
 }
 
 func splitBody(body string) []string {

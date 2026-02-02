@@ -11,9 +11,11 @@ export function ExportPostgres(arg1:string,arg2:string):Promise<string>;
 
 export function ExportSQL(arg1:string,arg2:string):Promise<string>;
 
+export function ImportCSV(arg1:string,arg2:string):Promise<string>;
+
 export function ImportMermaid(arg1:string):Promise<string>;
 
-export function ImportSQL(arg1:string):Promise<string>;
+export function ImportSQL(arg1:string,arg2:string):Promise<string>;
 
 export function ListFiles(arg1:string,arg2:string):Promise<Array<string>>;
 

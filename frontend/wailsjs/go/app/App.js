@@ -22,12 +22,16 @@ export function ExportSQL(arg1, arg2) {
   return window['go']['app']['App']['ExportSQL'](arg1, arg2);
 }
 
+export function ImportCSV(arg1, arg2) {
+  return window['go']['app']['App']['ImportCSV'](arg1, arg2);
+}
+
 export function ImportMermaid(arg1) {
   return window['go']['app']['App']['ImportMermaid'](arg1);
 }
 
-export function ImportSQL(arg1) {
-  return window['go']['app']['App']['ImportSQL'](arg1);
+export function ImportSQL(arg1, arg2) {
+  return window['go']['app']['App']['ImportSQL'](arg1, arg2);
 }
 
 export function ListFiles(arg1, arg2) {

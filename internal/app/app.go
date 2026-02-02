@@ -143,13 +143,32 @@ func (a *App) ExportPostgres(jsonContent string, schemaName string) (string, err
 	return sqlx.ExportPostgres(d, schemaName)
 }
 
-// ImportSQL parses DDL and returns diagram JSON.
-func (a *App) ImportSQL(sqlContent string) (string, error) {
-	d, err := importers.ParseSQL(sqlContent)
+// ImportSQL parses DDL and returns TableCatalog JSON (importSource set to the given name).
+func (a *App) ImportSQL(sqlContent string, importSource string) (string, error) {
+	catalog, err := importers.ParseSQL(sqlContent)
 	if err != nil {
 		return "", err
 	}
-	return d.MarshalJSONString()
+	catalog.ImportSource = importSource
+	b, err := json.Marshal(catalog)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// ImportCSV parses CSV (schema, table, column, type, is_nullable, field_order) and returns TableCatalog JSON.
+func (a *App) ImportCSV(csvContent string, importSource string) (string, error) {
+	catalog, err := importers.ParseCSV(csvContent)
+	if err != nil {
+		return "", err
+	}
+	catalog.ImportSource = importSource
+	b, err := json.Marshal(catalog)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 // ImportMermaid parses Mermaid ERD and returns diagram JSON.

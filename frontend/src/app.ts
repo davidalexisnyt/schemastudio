@@ -8,6 +8,7 @@ import type {
   WorkspaceConfig,
   CatalogTable,
   WorkspaceUIState,
+  TableCatalog,
 } from "./types";
 import { Store, createEmptyDiagram } from "./store";
 import { FIELD_TYPES, CARDINALITY_OPTIONS } from "./types";
@@ -1400,12 +1401,15 @@ async function openAndImportSQL(): Promise<void> {
   if (!path) return;
   try {
     const raw = await bridge.loadFile(path);
-    const json = await bridge.importSQL(raw);
-    const d = JSON.parse(json) as Diagram;
+    const importSource = path.replace(/^.*[/\\]/, "") || "import.sql";
+    const json = await bridge.importSQL(raw, importSource);
+    const catalog = JSON.parse(json) as TableCatalog;
+    const tables = catalog?.tables ?? [];
+    const relationships = catalog?.relationships ?? [];
     const doc = getActiveDoc();
     if (doc?.type === "workspace") {
       const w = doc as WorkspaceDoc;
-      for (const table of d.tables) {
+      for (const table of tables) {
         const catalogId = nextCatalogId();
         w.catalogTables.push({
           id: catalogId,
@@ -1419,47 +1423,19 @@ async function openAndImportSQL(): Promise<void> {
           })),
         });
       }
-      const inner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
-      if (inner) {
-        const GAP = 80;
-        let x = 50;
-        let y = 50;
-        const startIdx = w.catalogTables.length - d.tables.length;
-        for (let i = 0; i < d.tables.length; i++) {
-          const table = d.tables[i];
-          const catalogId = w.catalogTables[startIdx + i].id;
-          inner.store.addTableWithContent(
-            x,
-            y,
-            table.name,
-            table.fields.map((f) => ({
-              name: f.name,
-              type: f.type,
-              nullable: f.nullable,
-              primaryKey: f.primaryKey,
-            })),
-            catalogId
-          );
-          x += 280 + GAP;
-          if (x > 600) {
-            x = 50;
-            y += 200;
-          }
-        }
-      }
       await saveTableCatalog(w.rootPath, w.catalogTables);
       bindActiveTab();
-      render();
       refreshTabStrip();
       updateEditorContentVisibility();
       renderWorkspaceView();
-      appendStatus(
-        inner
-          ? `Imported SQL to catalog and diagram: ${d.tables.length} tables`
-          : `Imported SQL to catalog: ${d.tables.length} tables`
-      );
+      appendStatus(`Imported SQL to catalog: ${catalog.tables.length} tables`);
       showToast("Imported SQL to catalog");
     } else {
+      const d: Diagram = {
+        version: 1,
+        tables,
+        relationships,
+      };
       store.setDiagram(d);
       appendStatus(
         `Imported SQL from ${path}: ${d.tables.length} tables, ${d.relationships.length} relationships`
@@ -1477,6 +1453,71 @@ async function openAndImportSQL(): Promise<void> {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     appendStatus(`SQL import failed: ${msg}`, "error");
+    showToast("Import failed");
+  }
+}
+
+async function openAndImportCSV(): Promise<void> {
+  if (!bridge.isBackendAvailable()) {
+    showToast("Backend not available (run in Wails)");
+    return;
+  }
+  const path = await bridge.openFileDialog("Open CSV", "CSV", "*.csv");
+  if (!path) return;
+  try {
+    const raw = await bridge.loadFile(path);
+    const importSource = path.replace(/^.*[/\\]/, "") || "import.csv";
+    const json = await bridge.importCSV(raw, importSource);
+    const catalog = JSON.parse(json) as TableCatalog;
+    const tables = catalog?.tables ?? [];
+    const relationships = catalog?.relationships ?? [];
+    const doc = getActiveDoc();
+    if (doc?.type === "workspace") {
+      const w = doc as WorkspaceDoc;
+      for (const table of tables) {
+        const catalogId = nextCatalogId();
+        w.catalogTables.push({
+          id: catalogId,
+          name: table.name,
+          fields: table.fields.map((f) => ({
+            id: f.id,
+            name: f.name,
+            type: f.type,
+            nullable: f.nullable,
+            primaryKey: f.primaryKey,
+          })),
+        });
+      }
+      await saveTableCatalog(w.rootPath, w.catalogTables);
+      bindActiveTab();
+      refreshTabStrip();
+      updateEditorContentVisibility();
+      renderWorkspaceView();
+      appendStatus(`Imported CSV to catalog: ${catalog.tables.length} tables`);
+      showToast("Imported CSV to catalog");
+    } else {
+      const d: Diagram = {
+        version: 1,
+        tables,
+        relationships,
+      };
+      store.setDiagram(d);
+      appendStatus(
+        `Imported CSV from ${path}: ${d.tables.length} tables`
+      );
+      if (d.tables.length === 0) {
+        appendStatus(
+          "No tables found. CSV must have columns: schema, table, column, type, is_nullable, field_order.",
+          "error"
+        );
+        showToast("No tables found — check Status panel for expected format");
+      } else {
+        showToast("Imported CSV");
+      }
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    appendStatus(`CSV import failed: ${msg}`, "error");
     showToast("Import failed");
   }
 }
@@ -2410,6 +2451,284 @@ function showTableEditor(tableId: string): void {
     syncTableToCatalogAndDiagrams(tableId);
     overlay.remove();
     render();
+  };
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.textContent = "Cancel";
+  cancelBtn.onclick = () => overlay.remove();
+  footerDiv.appendChild(okBtn);
+  footerDiv.appendChild(cancelBtn);
+  panel.appendChild(footerDiv);
+  overlay.appendChild(panel);
+  document.body.appendChild(overlay);
+}
+
+/** Edit a catalog table definition (name + fields). Does not add the table to any diagram. Saves to catalog and syncs to diagrams that already use this table. */
+function showCatalogTableEditor(w: WorkspaceDoc, catalogId: string): void {
+  const catalogEntry = w.catalogTables.find((c) => c.id === catalogId);
+  if (!catalogEntry) return;
+  const existing = document.querySelector(".modal-overlay");
+  if (existing) existing.remove();
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  const panel = document.createElement("div");
+  panel.className = "modal-panel modal-panel-table-editor";
+  const headerDiv = document.createElement("div");
+  headerDiv.className = "modal-table-editor-header";
+  const title = document.createElement("h2");
+  title.className = "modal-title";
+  title.textContent = "Edit Table";
+  headerDiv.appendChild(title);
+  const nameLabel = document.createElement("label");
+  nameLabel.textContent = "Table name";
+  nameLabel.htmlFor = "catalog-table-editor-name";
+  headerDiv.appendChild(nameLabel);
+  const nameInput = document.createElement("input");
+  nameInput.id = "catalog-table-editor-name";
+  nameInput.type = "text";
+  nameInput.value = catalogEntry.name;
+  nameInput.className = "modal-input";
+  headerDiv.appendChild(nameInput);
+  panel.appendChild(headerDiv);
+
+  const contentDiv = document.createElement("div");
+  contentDiv.className = "modal-table-editor-content";
+  const fieldsSection = document.createElement("div");
+  fieldsSection.className = "modal-fields-section";
+  const fieldsHeading = document.createElement("h3");
+  fieldsHeading.textContent = "Fields";
+  fieldsSection.appendChild(fieldsHeading);
+  const fieldsTable = document.createElement("table");
+  fieldsTable.className = "modal-fields-table";
+  fieldsTable.innerHTML = `
+    <thead><tr>
+      <th style="width:24px"></th>
+      <th>Name</th>
+      <th>Type</th>
+      <th style="width:70px">Nullable</th>
+      <th style="width:80px">Primary Key</th>
+      <th style="width:40px"></th>
+    </tr></thead>
+    <tbody></tbody>
+  `;
+  const tbody = fieldsTable.querySelector("tbody")!;
+  const rows: {
+    id?: string;
+    nameInput: HTMLInputElement;
+    typeSelect: HTMLSelectElement;
+    nullableCb: HTMLInputElement;
+    pkCb: HTMLInputElement;
+    tr: HTMLTableRowElement;
+  }[] = [];
+  let fieldDragSrcIndex: number | null = null;
+
+  function addFieldRow(f: {
+    id?: string;
+    name: string;
+    type: string;
+    nullable?: boolean;
+    primaryKey?: boolean;
+  }) {
+    const tr = document.createElement("tr");
+    tr.draggable = true;
+    const dragTd = document.createElement("td");
+    dragTd.className = "modal-field-drag";
+    dragTd.textContent = "⋮⋮";
+    dragTd.title = "Drag to reorder";
+    const nameTd = document.createElement("td");
+    const nameIn = document.createElement("input");
+    nameIn.type = "text";
+    nameIn.value = f.name;
+    nameIn.placeholder = "Field name";
+    nameIn.className = "modal-field-name-input";
+    nameTd.appendChild(nameIn);
+    const typeTd = document.createElement("td");
+    const typeSel = document.createElement("select");
+    typeSel.className = "modal-field-type-select";
+    FIELD_TYPES.forEach((ft) => {
+      const opt = document.createElement("option");
+      opt.value = ft;
+      opt.textContent = ft;
+      if (ft === f.type) opt.selected = true;
+      typeSel.appendChild(opt);
+    });
+    typeTd.appendChild(typeSel);
+    const nullTd = document.createElement("td");
+    const nullableCb = document.createElement("input");
+    nullableCb.type = "checkbox";
+    nullableCb.checked = f.nullable ?? false;
+    nullTd.appendChild(nullableCb);
+    const pkTd = document.createElement("td");
+    const pkCb = document.createElement("input");
+    pkCb.type = "checkbox";
+    pkCb.checked = f.primaryKey ?? false;
+    pkTd.appendChild(pkCb);
+    const delTd = document.createElement("td");
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "modal-field-delete-btn";
+    removeBtn.title = "Remove field";
+    removeBtn.innerHTML = DELETE_ICON_SVG;
+    removeBtn.onclick = () => {
+      const idx = rows.findIndex((r) => r.tr === tr);
+      if (idx >= 0) rows.splice(idx, 1);
+      tr.remove();
+    };
+    delTd.appendChild(removeBtn);
+    tr.appendChild(dragTd);
+    tr.appendChild(nameTd);
+    tr.appendChild(typeTd);
+    tr.appendChild(nullTd);
+    tr.appendChild(pkTd);
+    tr.appendChild(delTd);
+    tbody.appendChild(tr);
+
+    tr.addEventListener("dragstart", (e) => {
+      fieldDragSrcIndex = rows.findIndex((r) => r.tr === tr);
+      e.dataTransfer!.effectAllowed = "move";
+      e.dataTransfer!.setData("text/plain", "");
+    });
+    tr.addEventListener("dragend", () => {
+      fieldDragSrcIndex = null;
+    });
+    tr.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      e.dataTransfer!.dropEffect = "move";
+    });
+    tr.addEventListener("drop", (e) => {
+      e.preventDefault();
+      const destIndex = rows.findIndex((r) => r.tr === tr);
+      if (
+        fieldDragSrcIndex === null ||
+        destIndex < 0 ||
+        fieldDragSrcIndex === destIndex
+      )
+        return;
+      const [removed] = rows.splice(fieldDragSrcIndex, 1);
+      rows.splice(destIndex, 0, removed);
+      const refTr = rows[destIndex + 1]?.tr ?? null;
+      if (refTr) tbody.insertBefore(removed.tr, refTr);
+      else tbody.appendChild(removed.tr);
+      fieldDragSrcIndex = null;
+    });
+
+    rows.push({
+      id: f.id,
+      nameInput: nameIn,
+      typeSelect: typeSel,
+      nullableCb,
+      pkCb,
+      tr,
+    });
+    return nameIn;
+  }
+
+  catalogEntry.fields.forEach((f) =>
+    addFieldRow({
+      id: f.id,
+      name: f.name,
+      type: f.type,
+      nullable: f.nullable,
+      primaryKey: f.primaryKey,
+    })
+  );
+  fieldsSection.appendChild(fieldsTable);
+  const addFieldPlus = document.createElement("button");
+  addFieldPlus.type = "button";
+  addFieldPlus.className = "modal-add-field-plus";
+  addFieldPlus.textContent = "+";
+  addFieldPlus.title = "Add field";
+  addFieldPlus.onclick = () => {
+    const newNameInput = addFieldRow({
+      name: "field",
+      type: "text",
+      nullable: false,
+      primaryKey: false,
+    });
+    requestAnimationFrame(() => newNameInput.focus());
+  };
+  fieldsSection.appendChild(addFieldPlus);
+  contentDiv.appendChild(fieldsSection);
+  panel.appendChild(contentDiv);
+
+  const footerDiv = document.createElement("div");
+  footerDiv.className = "modal-table-editor-footer";
+  const okBtn = document.createElement("button");
+  okBtn.type = "button";
+  okBtn.textContent = "OK";
+  okBtn.onclick = async () => {
+    const name = nameInput.value.trim() || catalogEntry.name;
+    const fields = rows.map((r) => ({
+      id: r.id ?? nextFieldId(),
+      name: r.nameInput.value.trim() || "field",
+      type: r.typeSelect.value,
+      nullable: r.nullableCb.checked,
+      primaryKey: r.pkCb.checked,
+    }));
+    catalogEntry.name = name;
+    catalogEntry.fields = fields;
+    await saveTableCatalog(w.rootPath, w.catalogTables);
+    const openPaths = new Set(w.innerDiagramTabs.map((t) => t.path));
+    for (const tab of w.innerDiagramTabs) {
+      const d = tab.store.getDiagram();
+      const table = d.tables.find((t) => t.catalogTableId === catalogId);
+      if (!table) continue;
+      const fieldsForDiagram = fields.map((cf, i) => ({
+        id: table.fields[i]?.id ?? nextFieldId(),
+        name: cf.name,
+        type: cf.type,
+        nullable: cf.nullable,
+        primaryKey: cf.primaryKey,
+      }));
+      tab.store.replaceTableContent(table.id, name, fieldsForDiagram);
+      await bridge.saveFile(tab.path, JSON.stringify(tab.store.getDiagram()));
+      tab.store.clearDirty();
+    }
+    if (bridge.isBackendAvailable()) {
+      try {
+        const files = await loadWorkspaceDiagramFiles(w);
+        for (const filename of files) {
+          const fullPath = pathJoin(w.rootPath, filename);
+          if (openPaths.has(fullPath)) continue;
+          try {
+            const raw = await bridge.loadFile(fullPath);
+            const d = JSON.parse(raw) as Diagram;
+            const table = d.tables?.find((t) => t.catalogTableId === catalogId);
+            if (!table) continue;
+            table.name = name;
+            const newFields = fields.map((cf, i) => ({
+              id: table.fields[i]?.id ?? nextFieldId(),
+              name: cf.name,
+              type: cf.type.trim().toLowerCase() || "text",
+              nullable: cf.nullable ?? false,
+              primaryKey: cf.primaryKey ?? false,
+            }));
+            table.fields = newFields;
+            const keptIds = new Set(newFields.map((f) => f.id));
+            if (d.relationships) {
+              d.relationships = d.relationships.filter(
+                (r) =>
+                  !(r.sourceTableId === table.id && !keptIds.has(r.sourceFieldId)) &&
+                  !(r.targetTableId === table.id && !keptIds.has(r.targetFieldId))
+              );
+            }
+            await bridge.saveFile(fullPath, JSON.stringify(d));
+          } catch {
+            // skip unreadable or unwritable file
+          }
+        }
+      } catch {
+        // fallback: open tabs already updated above
+      }
+    }
+    overlay.remove();
+    bindActiveTab();
+    refreshTabStrip();
+    updateEditorContentVisibility();
+    renderWorkspaceView();
+    const inner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
+    if (inner) render();
+    showToast("Table definition updated");
   };
   const cancelBtn = document.createElement("button");
   cancelBtn.type = "button";
@@ -4032,44 +4351,7 @@ function showWorkspaceSettingsModal(w: WorkspaceDoc): void {
 function openCatalogTableEditor(w: WorkspaceDoc, catalogId: string): void {
   const catalogEntry = w.catalogTables.find((c) => c.id === catalogId);
   if (!catalogEntry) return;
-  for (let i = 0; i < w.innerDiagramTabs.length; i++) {
-    const tab = w.innerDiagramTabs[i];
-    const table = tab.store
-      .getDiagram()
-      .tables.find((t) => t.catalogTableId === catalogId);
-    if (table) {
-      w.activeInnerDiagramIndex = i;
-      bindActiveTab();
-      refreshTabStrip();
-      updateEditorContentVisibility();
-      renderWorkspaceView();
-      showTableEditor(table.id);
-      return;
-    }
-  }
-  const inner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
-  if (!inner) {
-    showToast("Open or create a diagram first");
-    return;
-  }
-  const newTable = inner.store.addTableWithContent(
-    200,
-    200,
-    catalogEntry.name,
-    catalogEntry.fields.map((f) => ({
-      name: f.name,
-      type: f.type,
-      nullable: f.nullable,
-      primaryKey: f.primaryKey,
-    })),
-    catalogId
-  );
-  bindActiveTab();
-  render();
-  refreshTabStrip();
-  updateEditorContentVisibility();
-  renderWorkspaceView();
-  showTableEditor(newTable.id);
+  showCatalogTableEditor(w, catalogId);
 }
 
 /** Collect diagram names (open tabs + closed files on disk) that contain a table with this catalogId. */
@@ -4454,15 +4736,38 @@ function setupMenuBar(menuBar: HTMLElement): void {
   const toolsDropdown = document.createElement("div");
   toolsDropdown.className = "menu-bar-dropdown";
 
-  const importItem = document.createElement("button");
-  importItem.type = "button";
-  importItem.className = "menu-bar-dropdown-item";
-  importItem.textContent = "Import Tables";
-  importItem.onclick = () => {
+  const importWrapper = document.createElement("div");
+  importWrapper.className = "menu-bar-submenu-wrapper";
+  const importRow = document.createElement("div");
+  importRow.className = "menu-bar-submenu-row";
+  importRow.textContent = "Import Tables";
+  const importArrow = document.createElement("span");
+  importArrow.className = "menu-bar-submenu-arrow";
+  importArrow.textContent = "\u25B8";
+  importRow.appendChild(importArrow);
+  const importFlyout = document.createElement("div");
+  importFlyout.className = "menu-bar-flyout";
+  const fromSqlItem = document.createElement("button");
+  fromSqlItem.type = "button";
+  fromSqlItem.className = "menu-bar-dropdown-item";
+  fromSqlItem.textContent = "From SQL DDL";
+  fromSqlItem.onclick = () => {
     hideMenus();
     openAndImportSQL();
   };
-  toolsDropdown.appendChild(importItem);
+  importFlyout.appendChild(fromSqlItem);
+  const fromCsvItem = document.createElement("button");
+  fromCsvItem.type = "button";
+  fromCsvItem.className = "menu-bar-dropdown-item";
+  fromCsvItem.textContent = "From CSV";
+  fromCsvItem.onclick = () => {
+    hideMenus();
+    openAndImportCSV();
+  };
+  importFlyout.appendChild(fromCsvItem);
+  importWrapper.appendChild(importRow);
+  importWrapper.appendChild(importFlyout);
+  toolsDropdown.appendChild(importWrapper);
 
   const sep1 = document.createElement("div");
   sep1.className = "menu-bar-sep";
@@ -4611,6 +4916,10 @@ function toggleTheme(): void {
 
 function nextCatalogId(): string {
   return "catalog-" + Math.random().toString(36).slice(2, 11);
+}
+
+function nextFieldId(): string {
+  return "f-" + Math.random().toString(36).slice(2, 11);
 }
 
 async function syncTableToCatalogAndDiagrams(tableId: string): Promise<void> {

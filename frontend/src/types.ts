@@ -64,6 +64,13 @@ export interface Diagram {
   viewport?: Viewport;
 }
 
+/** Result of an import (SQL, CSV, etc.). Used to populate workspace catalog or a diagram. */
+export interface TableCatalog {
+  importSource: string;
+  tables: Table[];
+  relationships: Relationship[];
+}
+
 export type Selection =
   | { type: "table"; tableId: string }
   | { type: "field"; tableId: string; fieldId: string }
