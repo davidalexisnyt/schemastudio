@@ -34,6 +34,17 @@ export interface Relationship {
   name?: string;
   note?: string;
   cardinality?: string;
+  /** When set, this diagram relationship is synced with this catalog relationship. */
+  catalogRelationshipId?: string;
+}
+
+/** Relationship stored in the workspace catalog (between catalog tables, identified by field names). */
+export interface CatalogRelationship {
+  id: string;
+  sourceCatalogTableId: string;
+  targetCatalogTableId: string;
+  sourceFieldName: string;
+  targetFieldName: string;
 }
 
 export const CARDINALITY_OPTIONS = [

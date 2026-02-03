@@ -7,6 +7,7 @@ import type {
   RecentEntry,
   WorkspaceConfig,
   CatalogTable,
+  CatalogRelationship,
   WorkspaceUIState,
   TableCatalog,
 } from "./types";
@@ -73,6 +74,7 @@ const TRASH_ICON_SVG =
 type ViewMode = "landing" | "editor";
 const WORKSPACE_CONFIG_FILE = "workspace.config.json";
 const TABLE_CATALOG_FILE = "table_catalog.json";
+const CATALOG_RELATIONSHIPS_FILE = "catalog_relationships.json";
 const WORKSPACE_STATE_FILE = "workspace.state";
 
 type DiagramDoc = {
@@ -96,6 +98,7 @@ type WorkspaceDoc = {
   name: string;
   description?: string;
   catalogTables: CatalogTable[];
+  catalogRelationships: CatalogRelationship[];
   innerDiagramTabs: InnerDiagramTab[];
   activeInnerDiagramIndex: number;
   /** When true, save diagrams automatically. */
@@ -622,9 +625,13 @@ async function saveDiagram(): Promise<boolean> {
     currentFilePath = path;
   }
   try {
+    const doc = getActiveDoc();
+    if (doc?.type === "workspace") {
+      const w = doc as WorkspaceDoc;
+      await syncDiagramRelationshipsToCatalog(w, store.getDiagram());
+    }
     await bridge.saveFile(path, JSON.stringify(store.getDiagram()));
     store.clearDirty();
-    const doc = getActiveDoc();
     if (doc && doc.type === "diagram") {
       (doc as DiagramDoc).path = path;
       (doc as DiagramDoc).label = path.split(/[/\\]/).pop() ?? "Untitled";
@@ -668,10 +675,14 @@ async function saveDiagramAs(): Promise<boolean> {
   }
   if (!path) return false;
   try {
+    const doc = getActiveDoc();
+    if (doc?.type === "workspace") {
+      const w = doc as WorkspaceDoc;
+      await syncDiagramRelationshipsToCatalog(w, store.getDiagram());
+    }
     await bridge.saveFile(path, JSON.stringify(store.getDiagram()));
     store.clearDirty();
     currentFilePath = path;
-    const doc = getActiveDoc();
     if (doc && doc.type === "diagram") {
       (doc as DiagramDoc).path = path;
       (doc as DiagramDoc).label = path.split(/[/\\]/).pop() ?? "Untitled";
@@ -871,8 +882,10 @@ function setupToolbar(): void {
           if (autoSaveTimeoutId) clearTimeout(autoSaveTimeoutId);
           autoSaveTimeoutId = setTimeout(() => {
             autoSaveTimeoutId = null;
-            bridge
-              .saveFile(inner.path, JSON.stringify(store.getDiagram()))
+            syncDiagramRelationshipsToCatalog(w, store.getDiagram())
+              .then(() =>
+                bridge.saveFile(inner.path, JSON.stringify(store.getDiagram()))
+              )
               .then(() => {
                 store.clearDirty();
                 refreshTabStrip();
@@ -889,9 +902,11 @@ function setupToolbar(): void {
 
   document.body.addEventListener("click", (e) => {
     if (!(e.target as Element).closest(".dropdown")) {
-      rootContainer.querySelectorAll(".toolbar .dropdown.open").forEach((el) => {
-        el.classList.remove("open");
-      });
+      rootContainer
+        .querySelectorAll(".toolbar .dropdown.open")
+        .forEach((el) => {
+          el.classList.remove("open");
+        });
     }
   });
 
@@ -1502,9 +1517,7 @@ async function openAndImportCSV(): Promise<void> {
         relationships,
       };
       store.setDiagram(d);
-      appendStatus(
-        `Imported CSV from ${path}: ${d.tables.length} tables`
-      );
+      appendStatus(`Imported CSV from ${path}: ${d.tables.length} tables`);
       if (d.tables.length === 0) {
         appendStatus(
           "No tables found. CSV must have columns: schema, table, column, type, is_nullable, field_order.",
@@ -1730,7 +1743,7 @@ function setupCanvas(): void {
     const catalogEntry = w.catalogTables.find((c) => c.id === catalogId);
     if (!catalogEntry) return;
     const pt = screenToDiagram(e.clientX, e.clientY);
-    store.addTableWithContent(
+    const newTable = inner.store.addTableWithContent(
       pt.x,
       pt.y,
       catalogEntry.name,
@@ -1742,6 +1755,7 @@ function setupCanvas(): void {
       })),
       catalogId
     );
+    createDiagramRelationshipsFromCatalog(w, inner, catalogId, newTable);
     render();
     appendStatus(`Added ${catalogEntry.name} from catalog`);
   });
@@ -1898,8 +1912,19 @@ function setupCanvas(): void {
             label: "Delete",
             danger: true,
             fn: () => {
+              const rel = store
+                .getDiagram()
+                .relationships.find((r) => r.id === id);
               store.deleteRelationship(id);
               setSelection(null);
+              if (rel) {
+                const doc = getActiveDoc();
+                if (doc?.type === "workspace")
+                  syncRelationshipRemovalFromCatalog(
+                    doc as WorkspaceDoc,
+                    rel
+                  ).then(() => {});
+              }
             },
           },
         ]);
@@ -1978,9 +2003,25 @@ function setupCanvas(): void {
       if (selection.type === "table") store.deleteTable(selection.tableId);
       if (selection.type === "field")
         store.deleteField(selection.tableId, selection.fieldId);
-      if (selection.type === "relationship")
+      if (selection.type === "relationship") {
+        const rel = store
+          .getDiagram()
+          .relationships.find((r) => r.id === selection.relationshipId);
         store.deleteRelationship(selection.relationshipId);
-      setSelection(null);
+        if (rel) {
+          const doc = getActiveDoc();
+          if (doc?.type === "workspace")
+            syncRelationshipRemovalFromCatalog(doc as WorkspaceDoc, rel).then(
+              () => {}
+            );
+        }
+      }
+      if (
+        selection.type === "table" ||
+        selection.type === "field" ||
+        selection.type === "relationship"
+      )
+        setSelection(null);
     }
     // Only handle app shortcuts when no modal dialog is open (canvas only)
     const modalOpen = document.querySelector(".modal-overlay");
@@ -2252,6 +2293,11 @@ function showTableEditor(tableId: string): void {
       deleteRelBtn.innerHTML = DELETE_ICON_SVG;
       deleteRelBtn.onclick = () => {
         store.deleteRelationship(r.id);
+        const doc = getActiveDoc();
+        if (doc?.type === "workspace" && r.catalogRelationshipId)
+          syncRelationshipRemovalFromCatalog(doc as WorkspaceDoc, r).then(
+            () => {}
+          );
         renderRelationships();
       };
       cardHeader.appendChild(deleteRelBtn);
@@ -2435,6 +2481,82 @@ function showTableEditor(tableId: string): void {
 
   const footerDiv = document.createElement("div");
   footerDiv.className = "modal-table-editor-footer";
+  const doc = getActiveDoc();
+  if (doc?.type === "workspace" && t.catalogTableId) {
+    const syncBtn = document.createElement("button");
+    syncBtn.type = "button";
+    syncBtn.className = "modal-table-editor-sync-btn";
+    syncBtn.textContent = "Sync to Catalog";
+    syncBtn.onclick = async () => {
+      const w = doc as WorkspaceDoc;
+      const catalogEntry = w.catalogTables.find(
+        (c) => c.id === t.catalogTableId
+      );
+      if (!catalogEntry) {
+        showToast("Catalog entry not found");
+        return;
+      }
+      const name = nameInput.value.trim() || t.name;
+      const fields = rows.map((r) => ({
+        id: r.id,
+        name: r.nameInput.value.trim() || "field",
+        type: r.typeSelect.value,
+        nullable: r.nullableCb.checked,
+        primaryKey: r.pkCb.checked,
+      }));
+      catalogEntry.name = name;
+      catalogEntry.fields = fields.map((f, i) => ({
+        id: catalogEntry.fields[i]?.id ?? nextFieldId(),
+        name: f.name,
+        type: f.type,
+        nullable: f.nullable,
+        primaryKey: f.primaryKey,
+      }));
+      const diagram = store.getDiagram();
+      const relsForTable = (diagram.relationships ?? []).filter(
+        (r) => r.sourceTableId === tableId || r.targetTableId === tableId
+      );
+      let catalogChanged = false;
+      for (const rel of relsForTable) {
+        const srcT = diagram.tables.find((x) => x.id === rel.sourceTableId);
+        const tgtT = diagram.tables.find((x) => x.id === rel.targetTableId);
+        if (!srcT?.catalogTableId || !tgtT?.catalogTableId) continue;
+        const srcField = srcT.fields.find(
+          (f) => f.id === (rel.sourceFieldIds?.[0] ?? rel.sourceFieldId)
+        );
+        const tgtField = tgtT.fields.find(
+          (f) => f.id === (rel.targetFieldIds?.[0] ?? rel.targetFieldId)
+        );
+        if (!srcField || !tgtField) continue;
+        const sourceCatalogTableId = srcT.catalogTableId;
+        const targetCatalogTableId = tgtT.catalogTableId;
+        const sourceFieldName = srcField.name;
+        const targetFieldName = tgtField.name;
+        const alreadyInCatalog = w.catalogRelationships.some(
+          (r) =>
+            r.sourceCatalogTableId === sourceCatalogTableId &&
+            r.targetCatalogTableId === targetCatalogTableId &&
+            r.sourceFieldName === sourceFieldName &&
+            r.targetFieldName === targetFieldName
+        );
+        if (!alreadyInCatalog) {
+          w.catalogRelationships.push({
+            id: nextCatalogRelationshipId(),
+            sourceCatalogTableId,
+            targetCatalogTableId,
+            sourceFieldName,
+            targetFieldName,
+          });
+          catalogChanged = true;
+        }
+      }
+      await saveTableCatalog(w.rootPath, w.catalogTables);
+      if (catalogChanged)
+        await saveCatalogRelationships(w.rootPath, w.catalogRelationships);
+      showToast("Synced to catalog");
+    };
+    footerDiv.appendChild(syncBtn);
+  }
   const okBtn = document.createElement("button");
   okBtn.type = "button";
   okBtn.textContent = "OK";
@@ -2649,6 +2771,218 @@ function showCatalogTableEditor(w: WorkspaceDoc, catalogId: string): void {
   };
   fieldsSection.appendChild(addFieldPlus);
   contentDiv.appendChild(fieldsSection);
+
+  const relSection = document.createElement("div");
+  relSection.className = "modal-relationships-section";
+  const relHeading = document.createElement("h3");
+  relHeading.textContent = "Relationships";
+  relSection.appendChild(relHeading);
+  const relContainer = document.createElement("div");
+
+  function renderCatalogRelationships(): void {
+    relContainer.innerHTML = "";
+    const rels = w.catalogRelationships.filter(
+      (r) =>
+        r.sourceCatalogTableId === catalogId ||
+        r.targetCatalogTableId === catalogId
+    );
+    rels.forEach((catRel) => {
+      const weAreSource = catRel.sourceCatalogTableId === catalogId;
+      const otherCatalogId = weAreSource
+        ? catRel.targetCatalogTableId
+        : catRel.sourceCatalogTableId;
+      const otherEntry = w.catalogTables.find((c) => c.id === otherCatalogId);
+      if (!otherEntry) return;
+      const otherName = otherEntry.name;
+      const card = document.createElement("div");
+      card.className = "modal-relationship-card";
+      const cardHeader = document.createElement("div");
+      cardHeader.className = "modal-relationship-card-header";
+      const targetLabel = document.createElement("div");
+      targetLabel.className = "rel-target-name";
+      targetLabel.textContent = weAreSource
+        ? `Foreign: ${otherName}`
+        : `Primary: ${otherName}`;
+      cardHeader.appendChild(targetLabel);
+      const deleteRelBtn = document.createElement("button");
+      deleteRelBtn.type = "button";
+      deleteRelBtn.className =
+        "modal-field-delete-btn modal-relationship-delete";
+      deleteRelBtn.title = "Delete relationship";
+      deleteRelBtn.innerHTML = DELETE_ICON_SVG;
+      deleteRelBtn.onclick = () => {
+        const idx = w.catalogRelationships.findIndex((r) => r.id === catRel.id);
+        if (idx >= 0) {
+          w.catalogRelationships.splice(idx, 1);
+          saveCatalogRelationships(w.rootPath, w.catalogRelationships).then(
+            () => renderCatalogRelationships()
+          );
+        }
+      };
+      cardHeader.appendChild(deleteRelBtn);
+      card.appendChild(cardHeader);
+      const mapTable = document.createElement("table");
+      mapTable.className = "modal-relationship-table";
+      mapTable.innerHTML =
+        "<thead><tr><th>Source Field</th><th>Target Field</th><th></th></tr></thead><tbody></tbody>";
+      const mapTbody = mapTable.querySelector("tbody")!;
+      const tr = document.createElement("tr");
+      const srcTd = document.createElement("td");
+      const srcSel = document.createElement("select");
+      srcSel.className = "src-field";
+      const ourFields = catalogEntry.fields;
+      const theirFields = otherEntry.fields;
+      const srcFields = weAreSource ? ourFields : theirFields;
+      const tgtFields = weAreSource ? theirFields : ourFields;
+      srcFields.forEach((f) => {
+        const opt = document.createElement("option");
+        opt.value = f.name;
+        opt.textContent = f.name;
+        const currentSrcName = weAreSource
+          ? catRel.sourceFieldName
+          : catRel.targetFieldName;
+        if (f.name === currentSrcName) opt.selected = true;
+        srcSel.appendChild(opt);
+      });
+      srcSel.onchange = () => {
+        const newSrcName = srcSel.value;
+        const newTgtName = tgtSel.value;
+        if (weAreSource) {
+          catRel.sourceFieldName = newSrcName;
+          catRel.targetFieldName = newTgtName;
+        } else {
+          catRel.sourceFieldName = newTgtName;
+          catRel.targetFieldName = newSrcName;
+        }
+        saveCatalogRelationships(w.rootPath, w.catalogRelationships).then(
+          () => {}
+        );
+      };
+      srcTd.appendChild(srcSel);
+      const tgtTd = document.createElement("td");
+      const tgtSel = document.createElement("select");
+      tgtSel.className = "tgt-field";
+      tgtFields.forEach((f) => {
+        const opt = document.createElement("option");
+        opt.value = f.name;
+        opt.textContent = f.name;
+        const currentTgtName = weAreSource
+          ? catRel.targetFieldName
+          : catRel.sourceFieldName;
+        if (f.name === currentTgtName) opt.selected = true;
+        tgtSel.appendChild(opt);
+      });
+      tgtSel.onchange = () => {
+        const newSrcName = srcSel.value;
+        const newTgtName = tgtSel.value;
+        if (weAreSource) {
+          catRel.sourceFieldName = newSrcName;
+          catRel.targetFieldName = newTgtName;
+        } else {
+          catRel.sourceFieldName = newTgtName;
+          catRel.targetFieldName = newSrcName;
+        }
+        saveCatalogRelationships(w.rootPath, w.catalogRelationships).then(
+          () => {}
+        );
+      };
+      tgtTd.appendChild(tgtSel);
+      const delTd = document.createElement("td");
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "modal-field-delete-btn";
+      delBtn.innerHTML = DELETE_ICON_SVG;
+      delBtn.title = "Remove relationship";
+      delBtn.onclick = () => {
+        const idx = w.catalogRelationships.findIndex((r) => r.id === catRel.id);
+        if (idx >= 0) {
+          w.catalogRelationships.splice(idx, 1);
+          saveCatalogRelationships(w.rootPath, w.catalogRelationships).then(
+            () => renderCatalogRelationships()
+          );
+        }
+      };
+      delTd.appendChild(delBtn);
+      tr.appendChild(srcTd);
+      tr.appendChild(tgtTd);
+      tr.appendChild(delTd);
+      mapTbody.appendChild(tr);
+      card.appendChild(mapTable);
+      relContainer.appendChild(card);
+    });
+
+    const addBlock = document.createElement("div");
+    addBlock.className = "modal-add-relationship-block";
+    const roleSelect = document.createElement("select");
+    roleSelect.innerHTML =
+      '<option value="source">This table is Primary</option><option value="target">This table is Foreign</option>';
+    const tableSelect = document.createElement("select");
+    w.catalogTables
+      .filter((c) => c.id !== catalogId)
+      .forEach((c) => {
+        const opt = document.createElement("option");
+        opt.value = c.id;
+        opt.textContent = c.name;
+        tableSelect.appendChild(opt);
+      });
+    const srcFieldSelect = document.createElement("select");
+    catalogEntry.fields.forEach((f) => {
+      const opt = document.createElement("option");
+      opt.value = f.name;
+      opt.textContent = f.name;
+      srcFieldSelect.appendChild(opt);
+    });
+    const tgtFieldSelect = document.createElement("select");
+    function updateTgtFieldOptions(): void {
+      const otherId = tableSelect.value;
+      const other = w.catalogTables.find((c) => c.id === otherId);
+      tgtFieldSelect.innerHTML = "";
+      if (other) {
+        other.fields.forEach((f) => {
+          const opt = document.createElement("option");
+          opt.value = f.name;
+          opt.textContent = f.name;
+          tgtFieldSelect.appendChild(opt);
+        });
+      }
+    }
+    tableSelect.onchange = updateTgtFieldOptions;
+    updateTgtFieldOptions();
+    addBlock.appendChild(roleSelect);
+    addBlock.appendChild(tableSelect);
+    addBlock.appendChild(document.createTextNode(" "));
+    addBlock.appendChild(srcFieldSelect);
+    addBlock.appendChild(tgtFieldSelect);
+    const createBtn = document.createElement("button");
+    createBtn.type = "button";
+    createBtn.className = "create-rel-btn";
+    createBtn.textContent = "Add";
+    createBtn.onclick = () => {
+      const otherId = tableSelect.value;
+      const role = roleSelect.value as "source" | "target";
+      const ourFieldName = srcFieldSelect.value;
+      const theirFieldName = tgtFieldSelect.value;
+      if (!otherId || !ourFieldName || !theirFieldName) return;
+      const weAreSource = role === "source";
+      const newRel: CatalogRelationship = {
+        id: nextCatalogRelationshipId(),
+        sourceCatalogTableId: weAreSource ? catalogId : otherId,
+        targetCatalogTableId: weAreSource ? otherId : catalogId,
+        sourceFieldName: weAreSource ? ourFieldName : theirFieldName,
+        targetFieldName: weAreSource ? theirFieldName : ourFieldName,
+      };
+      w.catalogRelationships.push(newRel);
+      saveCatalogRelationships(w.rootPath, w.catalogRelationships).then(() =>
+        renderCatalogRelationships()
+      );
+    };
+    addBlock.appendChild(createBtn);
+    relContainer.appendChild(addBlock);
+  }
+
+  renderCatalogRelationships();
+  relSection.appendChild(relContainer);
+  contentDiv.appendChild(relSection);
   panel.appendChild(contentDiv);
 
   const footerDiv = document.createElement("div");
@@ -2681,6 +3015,7 @@ function showCatalogTableEditor(w: WorkspaceDoc, catalogId: string): void {
         primaryKey: cf.primaryKey,
       }));
       tab.store.replaceTableContent(table.id, name, fieldsForDiagram);
+      await syncDiagramRelationshipsToCatalog(w, tab.store.getDiagram());
       await bridge.saveFile(tab.path, JSON.stringify(tab.store.getDiagram()));
       tab.store.clearDirty();
     }
@@ -2708,8 +3043,14 @@ function showCatalogTableEditor(w: WorkspaceDoc, catalogId: string): void {
             if (d.relationships) {
               d.relationships = d.relationships.filter(
                 (r) =>
-                  !(r.sourceTableId === table.id && !keptIds.has(r.sourceFieldId)) &&
-                  !(r.targetTableId === table.id && !keptIds.has(r.targetFieldId))
+                  !(
+                    r.sourceTableId === table.id &&
+                    !keptIds.has(r.sourceFieldId)
+                  ) &&
+                  !(
+                    r.targetTableId === table.id &&
+                    !keptIds.has(r.targetFieldId)
+                  )
               );
             }
             await bridge.saveFile(fullPath, JSON.stringify(d));
@@ -2932,7 +3273,17 @@ function showRelationshipDialog(
     deleteBtn.textContent = "Delete";
     deleteBtn.className = "modal-relationship-delete-btn";
     deleteBtn.onclick = () => {
+      const rel = store
+        .getDiagram()
+        .relationships.find((r) => r.id === relationshipId);
       store.deleteRelationship(relationshipId);
+      if (rel) {
+        const doc = getActiveDoc();
+        if (doc?.type === "workspace")
+          syncRelationshipRemovalFromCatalog(doc as WorkspaceDoc, rel).then(
+            () => {}
+          );
+      }
       overlay.remove();
       render();
     };
@@ -2963,8 +3314,15 @@ function showRelationshipDialog(
         noteInput.value.trim() || undefined,
         cardSelect.value || undefined
       );
+      const doc = getActiveDoc();
+      if (doc?.type === "workspace") {
+        const w = doc as WorkspaceDoc;
+        const d = store.getDiagram();
+        const rel = d.relationships.find((r) => r.id === relationshipId);
+        if (rel) syncRelationshipUpdateToCatalog(w, d, rel).then(() => {});
+      }
     } else {
-      store.addRelationshipWithMeta(
+      const rel = store.addRelationshipWithMeta(
         sourceTableId,
         newSourceFieldIds,
         targetTableId,
@@ -2973,6 +3331,11 @@ function showRelationshipDialog(
         noteInput.value.trim() || undefined,
         cardSelect.value || undefined
       );
+      const doc = getActiveDoc();
+      if (doc?.type === "workspace") {
+        const w = doc as WorkspaceDoc;
+        syncRelationshipToCatalog(w, store.getDiagram(), rel).then(() => {});
+      }
     }
     overlay.remove();
     render();
@@ -3216,6 +3579,32 @@ async function saveTableCatalog(
   );
 }
 
+async function loadCatalogRelationships(
+  rootPath: string
+): Promise<CatalogRelationship[]> {
+  if (!bridge.isBackendAvailable()) return [];
+  try {
+    const raw = await bridge.loadFile(
+      pathJoin(rootPath, CATALOG_RELATIONSHIPS_FILE)
+    );
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? (arr as CatalogRelationship[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveCatalogRelationships(
+  rootPath: string,
+  relationships: CatalogRelationship[]
+): Promise<void> {
+  if (!bridge.isBackendAvailable()) return;
+  await bridge.saveFile(
+    pathJoin(rootPath, CATALOG_RELATIONSHIPS_FILE),
+    JSON.stringify(relationships, null, 2)
+  );
+}
+
 async function loadWorkspaceUIState(
   rootPath: string
 ): Promise<WorkspaceUIState> {
@@ -3261,6 +3650,7 @@ async function newWorkspaceTab(): Promise<void> {
     await saveWorkspaceConfig(rootPath, config);
     await saveTableCatalog(rootPath, []);
     const label = rootPath.split(/[/\\]/).filter(Boolean).pop() ?? "Workspace";
+    await saveCatalogRelationships(rootPath, []);
     const doc: WorkspaceDoc = {
       type: "workspace",
       id: nextDocId(),
@@ -3269,6 +3659,7 @@ async function newWorkspaceTab(): Promise<void> {
       name: config.name,
       description: config.description,
       catalogTables: [],
+      catalogRelationships: [],
       innerDiagramTabs: [],
       activeInnerDiagramIndex: -1,
       autoSaveDiagrams: config.autoSaveDiagrams ?? false,
@@ -3311,6 +3702,7 @@ async function openWorkspaceTab(path?: string): Promise<void> {
   try {
     const config = await loadWorkspaceConfig(rootPath);
     const catalogTables = await loadTableCatalog(rootPath);
+    const catalogRelationships = await loadCatalogRelationships(rootPath);
     const workspaceUIState = await loadWorkspaceUIState(rootPath);
     const label =
       config.name ||
@@ -3323,6 +3715,7 @@ async function openWorkspaceTab(path?: string): Promise<void> {
       name: config.name,
       description: config.description,
       catalogTables,
+      catalogRelationships,
       innerDiagramTabs: [],
       activeInnerDiagramIndex: -1,
       autoSaveDiagrams: config.autoSaveDiagrams ?? false,
@@ -4097,7 +4490,8 @@ function showNewDiagramModal(w: WorkspaceDoc): void {
   const overlay = document.createElement("div");
   overlay.className = "modal-overlay";
   const panel = document.createElement("div");
-  panel.className = "modal-panel modal-panel-workspace-settings modal-panel-new-diagram";
+  panel.className =
+    "modal-panel modal-panel-workspace-settings modal-panel-new-diagram";
 
   const headerDiv = document.createElement("div");
   headerDiv.className = "modal-workspace-settings-header";
@@ -4205,8 +4599,8 @@ function switchWorkspaceInnerTab(w: WorkspaceDoc, index: number): void {
   if (leavingInner && w.autoSaveDiagrams && leavingInner.store.isDirty()) {
     const path = leavingInner.path;
     const diagram = leavingInner.store.getDiagram();
-    bridge
-      .saveFile(path, JSON.stringify(diagram))
+    syncDiagramRelationshipsToCatalog(w, diagram)
+      .then(() => bridge.saveFile(path, JSON.stringify(diagram)))
       .then(() => {
         leavingInner.store.clearDirty();
         refreshTabStrip();
@@ -4234,6 +4628,7 @@ async function closeWorkspaceInnerTab(
     const choice = await confirmUnsavedChanges();
     if (choice === "cancel") return;
     if (choice === "save") {
+      await syncDiagramRelationshipsToCatalog(w, inner.store.getDiagram());
       await bridge.saveFile(
         inner.path,
         JSON.stringify(inner.store.getDiagram())
@@ -4318,7 +4713,8 @@ function showWorkspaceSettingsModal(w: WorkspaceDoc): void {
   autoSaveCheckbox.checked = w.autoSaveDiagrams ?? false;
   autoSaveLabel.appendChild(autoSaveCheckbox);
   const autoSaveText = document.createElement("span");
-  autoSaveText.textContent = " Auto-save diagrams (within 5 seconds of changes)";
+  autoSaveText.textContent =
+    " Auto-save diagrams (within 5 seconds of changes)";
   autoSaveLabel.appendChild(autoSaveText);
   contentDiv.appendChild(autoSaveLabel);
   panel.appendChild(contentDiv);
@@ -4575,8 +4971,14 @@ async function removeCatalogTable(
     }
   }
 
+  w.catalogRelationships = w.catalogRelationships.filter(
+    (r) =>
+      r.sourceCatalogTableId !== catalogId &&
+      r.targetCatalogTableId !== catalogId
+  );
   w.catalogTables.splice(idx, 1);
   await saveTableCatalog(w.rootPath, w.catalogTables);
+  await saveCatalogRelationships(w.rootPath, w.catalogRelationships);
   refreshTabStrip();
   updateEditorContentVisibility();
   renderWorkspaceView();
@@ -4824,13 +5226,11 @@ function setupMenuBar(menuBar: HTMLElement): void {
     ["Export as SVG", () => exportSVG()],
     [
       "Export in Mermaid format",
-      () =>
-        exportMermaid().catch((e) => showToast((e as Error).message)),
+      () => exportMermaid().catch((e) => showToast((e as Error).message)),
     ],
     [
       "Export in PlantUML format",
-      () =>
-        exportPlantUML().catch((e) => showToast((e as Error).message)),
+      () => exportPlantUML().catch((e) => showToast((e as Error).message)),
     ],
   ];
   exportItems.forEach(([exportLabel, fn]) => {
@@ -4922,6 +5322,160 @@ function nextFieldId(): string {
   return "f-" + Math.random().toString(36).slice(2, 11);
 }
 
+function nextCatalogRelationshipId(): string {
+  return "crel-" + Math.random().toString(36).slice(2, 11);
+}
+
+async function syncRelationshipToCatalog(
+  w: WorkspaceDoc,
+  diagram: Diagram,
+  rel: Relationship
+): Promise<void> {
+  const srcT = diagram.tables.find((t) => t.id === rel.sourceTableId);
+  const tgtT = diagram.tables.find((t) => t.id === rel.targetTableId);
+  if (!srcT?.catalogTableId || !tgtT?.catalogTableId) return;
+  const srcField = srcT.fields.find(
+    (f) => f.id === (rel.sourceFieldIds?.[0] ?? rel.sourceFieldId)
+  );
+  const tgtField = tgtT.fields.find(
+    (f) => f.id === (rel.targetFieldIds?.[0] ?? rel.targetFieldId)
+  );
+  if (!srcField || !tgtField) return;
+  const catalogRel: CatalogRelationship = {
+    id: nextCatalogRelationshipId(),
+    sourceCatalogTableId: srcT.catalogTableId,
+    targetCatalogTableId: tgtT.catalogTableId,
+    sourceFieldName: srcField.name,
+    targetFieldName: tgtField.name,
+  };
+  w.catalogRelationships.push(catalogRel);
+  rel.catalogRelationshipId = catalogRel.id;
+  await saveCatalogRelationships(w.rootPath, w.catalogRelationships);
+}
+
+async function syncRelationshipRemovalFromCatalog(
+  w: WorkspaceDoc,
+  rel: Relationship
+): Promise<void> {
+  if (!rel.catalogRelationshipId) return;
+  const idx = w.catalogRelationships.findIndex(
+    (r) => r.id === rel.catalogRelationshipId
+  );
+  if (idx >= 0) {
+    w.catalogRelationships.splice(idx, 1);
+    await saveCatalogRelationships(w.rootPath, w.catalogRelationships);
+  }
+}
+
+async function syncRelationshipUpdateToCatalog(
+  w: WorkspaceDoc,
+  diagram: Diagram,
+  rel: Relationship
+): Promise<void> {
+  if (!rel.catalogRelationshipId) return;
+  const catRel = w.catalogRelationships.find(
+    (r) => r.id === rel.catalogRelationshipId
+  );
+  if (!catRel) return;
+  const srcT = diagram.tables.find((t) => t.id === rel.sourceTableId);
+  const tgtT = diagram.tables.find((t) => t.id === rel.targetTableId);
+  const srcField = srcT?.fields.find(
+    (f) => f.id === (rel.sourceFieldIds?.[0] ?? rel.sourceFieldId)
+  );
+  const tgtField = tgtT?.fields.find(
+    (f) => f.id === (rel.targetFieldIds?.[0] ?? rel.targetFieldId)
+  );
+  if (srcField) catRel.sourceFieldName = srcField.name;
+  if (tgtField) catRel.targetFieldName = tgtField.name;
+  await saveCatalogRelationships(w.rootPath, w.catalogRelationships);
+}
+
+/** Create diagram relationships from catalog for the just-added table (by catalog id). */
+function createDiagramRelationshipsFromCatalog(
+  w: WorkspaceDoc,
+  inner: InnerDiagramTab,
+  addedCatalogId: string,
+  newTable: Table
+): void {
+  const d = inner.store.getDiagram();
+  for (const catRel of w.catalogRelationships) {
+    const weAreSource = catRel.sourceCatalogTableId === addedCatalogId;
+    const weAreTarget = catRel.targetCatalogTableId === addedCatalogId;
+    if (!weAreSource && !weAreTarget) continue;
+    const otherCatalogId = weAreSource
+      ? catRel.targetCatalogTableId
+      : catRel.sourceCatalogTableId;
+    const otherTable = d.tables.find(
+      (t) => t.catalogTableId === otherCatalogId
+    );
+    if (!otherTable) continue;
+    const ourFieldName = weAreSource
+      ? catRel.sourceFieldName
+      : catRel.targetFieldName;
+    const otherFieldName = weAreSource
+      ? catRel.targetFieldName
+      : catRel.sourceFieldName;
+    const ourField = newTable.fields.find((f) => f.name === ourFieldName);
+    const otherField = otherTable.fields.find((f) => f.name === otherFieldName);
+    if (!ourField || !otherField) continue;
+    const sourceTableId = weAreSource ? newTable.id : otherTable.id;
+    const targetTableId = weAreSource ? otherTable.id : newTable.id;
+    const sourceFieldId = weAreSource ? ourField.id : otherField.id;
+    const targetFieldId = weAreSource ? otherField.id : ourField.id;
+    const r = inner.store.addRelationshipWithMeta(
+      sourceTableId,
+      [sourceFieldId],
+      targetTableId,
+      [targetFieldId]
+    );
+    r.catalogRelationshipId = catRel.id;
+  }
+}
+
+/** When saving a diagram, ensure every relationship in the diagram (between catalog-linked tables) exists in the catalog. Call before writing the diagram file. */
+async function syncDiagramRelationshipsToCatalog(
+  w: WorkspaceDoc,
+  diagram: Diagram
+): Promise<void> {
+  const relationships = diagram.relationships ?? [];
+  let changed = false;
+  for (const rel of relationships) {
+    const srcT = diagram.tables.find((t) => t.id === rel.sourceTableId);
+    const tgtT = diagram.tables.find((t) => t.id === rel.targetTableId);
+    if (!srcT?.catalogTableId || !tgtT?.catalogTableId) continue;
+    const srcField = srcT.fields.find(
+      (f) => f.id === (rel.sourceFieldIds?.[0] ?? rel.sourceFieldId)
+    );
+    const tgtField = tgtT.fields.find(
+      (f) => f.id === (rel.targetFieldIds?.[0] ?? rel.targetFieldId)
+    );
+    if (!srcField || !tgtField) continue;
+    const sourceCatalogTableId = srcT.catalogTableId;
+    const targetCatalogTableId = tgtT.catalogTableId;
+    const sourceFieldName = srcField.name;
+    const targetFieldName = tgtField.name;
+    const alreadyInCatalog = w.catalogRelationships.some(
+      (r) =>
+        r.sourceCatalogTableId === sourceCatalogTableId &&
+        r.targetCatalogTableId === targetCatalogTableId &&
+        r.sourceFieldName === sourceFieldName &&
+        r.targetFieldName === targetFieldName
+    );
+    if (!alreadyInCatalog) {
+      w.catalogRelationships.push({
+        id: nextCatalogRelationshipId(),
+        sourceCatalogTableId,
+        targetCatalogTableId,
+        sourceFieldName,
+        targetFieldName,
+      });
+      changed = true;
+    }
+  }
+  if (changed)
+    await saveCatalogRelationships(w.rootPath, w.catalogRelationships);
+}
+
 async function syncTableToCatalogAndDiagrams(tableId: string): Promise<void> {
   const doc = getActiveDoc();
   if (doc?.type !== "workspace") return;
@@ -4959,6 +5513,7 @@ async function syncTableToCatalogAndDiagrams(tableId: string): Promise<void> {
         primaryKey: cf.primaryKey,
       }));
       tab.store.replaceTableContent(otherTable.id, catalogEntry.name, fields);
+      await syncDiagramRelationshipsToCatalog(w, tab.store.getDiagram());
       await bridge.saveFile(tab.path, JSON.stringify(tab.store.getDiagram()));
       tab.store.clearDirty();
     }
@@ -4969,7 +5524,7 @@ async function syncTableToCatalogAndDiagrams(tableId: string): Promise<void> {
   renderWorkspaceView();
 }
 
-/** Add a table at (x, y). In a workspace, also add to catalog and link. */
+/** Add a table at (x, y). In a workspace, also add to catalog and link (table id = catalog id). */
 function addTableToCurrentDiagram(x: number, y: number): void {
   const doc = getActiveDoc();
   if (!doc) return;
@@ -4980,21 +5535,23 @@ function addTableToCurrentDiagram(x: number, y: number): void {
       showToast("Open or create a diagram first");
       return;
     }
-    const table = inner.store.addTable(x, y);
+    const d = inner.store.getDiagram();
+    const name = "Table" + (d.tables.length + 1);
+    const defaultFields = [{ name: "id", type: "int" }];
     const catalogId = nextCatalogId();
     const catalogEntry: CatalogTable = {
       id: catalogId,
-      name: table.name,
-      fields: table.fields.map((f) => ({
-        id: f.id,
+      name,
+      fields: defaultFields.map((f) => ({
+        id: nextFieldId(),
         name: f.name,
         type: f.type,
-        nullable: f.nullable,
-        primaryKey: f.primaryKey,
+        nullable: false,
+        primaryKey: false,
       })),
     };
     w.catalogTables.push(catalogEntry);
-    inner.store.setTableCatalogId(table.id, catalogId);
+    inner.store.addTableWithContent(x, y, name, defaultFields, catalogId);
     saveTableCatalog(w.rootPath, w.catalogTables).catch((e) =>
       showToast("Failed to save catalog: " + (e as Error).message)
     );

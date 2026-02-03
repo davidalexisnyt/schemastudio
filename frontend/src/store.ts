@@ -125,12 +125,22 @@ export class Store {
     x: number,
     y: number,
     name: string,
-    fields: { name: string; type: string; nullable?: boolean; primaryKey?: boolean }[],
+    fields: {
+      name: string;
+      type: string;
+      nullable?: boolean;
+      primaryKey?: boolean;
+    }[],
     catalogTableId?: string
   ): Table {
     this.pushUndo();
+    const idAlreadyUsed = catalogTableId
+      ? this.diagram.tables.some((t) => t.id === catalogTableId)
+      : false;
+    const tableId =
+      catalogTableId && !idAlreadyUsed ? catalogTableId : nextId("t");
     const t: Table = {
-      id: nextId("t"),
+      id: tableId,
       name,
       x,
       y,
@@ -185,7 +195,7 @@ export class Store {
       type: string;
       nullable?: boolean;
       primaryKey?: boolean;
-    }[],
+    }[]
   ): void {
     this.pushUndo();
     const t = this.diagram.tables.find((x) => x.id === tableId);
@@ -216,7 +226,7 @@ export class Store {
     this.diagram.relationships = this.diagram.relationships.filter(
       (r) =>
         !(r.sourceTableId === tableId && !keptIds.has(r.sourceFieldId)) &&
-        !(r.targetTableId === tableId && !keptIds.has(r.targetFieldId)),
+        !(r.targetTableId === tableId && !keptIds.has(r.targetFieldId))
     );
     t.fields = newFields;
     this.notify();
@@ -226,7 +236,7 @@ export class Store {
     this.pushUndo();
     this.diagram.tables = this.diagram.tables.filter((t) => t.id !== tableId);
     this.diagram.relationships = this.diagram.relationships.filter(
-      (r) => r.sourceTableId !== tableId && r.targetTableId !== tableId,
+      (r) => r.sourceTableId !== tableId && r.targetTableId !== tableId
     );
     this.notify();
   }
@@ -236,7 +246,7 @@ export class Store {
     name?: string,
     type?: string,
     nullable?: boolean,
-    primaryKey?: boolean,
+    primaryKey?: boolean
   ): Field {
     this.pushUndo();
     const t = this.diagram.tables.find((x) => x.id === tableId);
@@ -275,7 +285,7 @@ export class Store {
     name: string,
     type: string,
     nullable?: boolean,
-    primaryKey?: boolean,
+    primaryKey?: boolean
   ): void {
     const t = this.diagram.tables.find((x) => x.id === tableId);
     if (!t) return;
@@ -296,7 +306,7 @@ export class Store {
     this.diagram.relationships = this.diagram.relationships.filter(
       (r) =>
         !(r.sourceTableId === tableId && r.sourceFieldId === fieldId) &&
-        !(r.targetTableId === tableId && r.targetFieldId === fieldId),
+        !(r.targetTableId === tableId && r.targetFieldId === fieldId)
     );
     this.notify();
   }
@@ -305,7 +315,7 @@ export class Store {
     sourceTableId: string,
     sourceFieldId: string,
     targetTableId: string,
-    targetFieldId: string,
+    targetFieldId: string
   ): Relationship {
     this.pushUndo();
     const r: Relationship = {
@@ -327,7 +337,7 @@ export class Store {
     targetFieldIds: string[],
     name?: string,
     note?: string,
-    cardinality?: string,
+    cardinality?: string
   ): Relationship {
     this.pushUndo();
     const r: Relationship = {
@@ -360,7 +370,7 @@ export class Store {
     targetFieldIds: string[],
     name?: string,
     note?: string,
-    cardinality?: string,
+    cardinality?: string
   ): void {
     this.pushUndo();
     const r = this.diagram.relationships.find((x) => x.id === relationshipId);
@@ -378,7 +388,7 @@ export class Store {
   deleteRelationship(relationshipId: string): void {
     this.pushUndo();
     this.diagram.relationships = this.diagram.relationships.filter(
-      (r) => r.id !== relationshipId,
+      (r) => r.id !== relationshipId
     );
     this.notify();
   }
