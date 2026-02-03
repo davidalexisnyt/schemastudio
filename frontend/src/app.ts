@@ -3455,6 +3455,13 @@ function showLanding(): void {
   const wrap = document.createElement("div");
   wrap.className = "landing-wrap";
 
+  const iconEl = document.createElement("img");
+  iconEl.className = "landing-app-icon";
+  iconEl.src = "/appicon.svg";
+  iconEl.alt = "";
+  iconEl.setAttribute("aria-hidden", "true");
+  wrap.appendChild(iconEl);
+
   const titleBlock = document.createElement("div");
   titleBlock.className = "landing-title-block";
   const title = document.createElement("h1");

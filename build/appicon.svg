@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <!-- Blueprint blocks: light-to-dark for layered feel -->
+    <linearGradient id="blockMain" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#64748b"/>
+      <stop offset="100%" style="stop-color:#475569"/>
+    </linearGradient>
+    <linearGradient id="blockAccent1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366f1"/>
+      <stop offset="100%" style="stop-color:#4f46e5"/>
+    </linearGradient>
+    <linearGradient id="blockAccent2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0ea5e9"/>
+      <stop offset="100%" style="stop-color:#0284c7"/>
+    </linearGradient>
+  </defs>
+  <!-- Connector lines (blueprint grid): horizontal and vertical -->
+  <g stroke="#94a3b8" stroke-width="2" stroke-dasharray="5 4" opacity="0.6">
+    <line x1="64" y1="12" x2="64" y2="116"/>
+    <line x1="12" y1="64" x2="116" y2="64"/>
+  </g>
+  <!-- Interlocking structure: central large square -->
+  <rect x="28" y="28" width="72" height="72" rx="6" ry="6"
+        fill="url(#blockMain)" stroke="#334155" stroke-width="2.5"/>
+  <!-- Overlapping square: top-right (interlocks) -->
+  <rect x="60" y="8" width="60" height="60" rx="6" ry="6"
+        fill="url(#blockAccent1)" stroke="#4338ca" stroke-width="2.5"/>
+  <!-- Overlapping square: bottom-left (interlocks) -->
+  <rect x="8" y="60" width="60" height="60" rx="6" ry="6"
+        fill="url(#blockAccent2)" stroke="#0369a1" stroke-width="2.5"/>
+  <!-- Small node: bottom-right, completes unified structure -->
+  <rect x="76" y="76" width="44" height="44" rx="5" ry="5"
+        fill="url(#blockMain)" stroke="#334155" stroke-width="2"/>
+  <!-- Solid connector lines between blocks (blueprint relationships) -->
+  <g stroke="#475569" stroke-width="2.5" stroke-linecap="round">
+    <line x1="64" y1="64" x2="98" y2="98"/>
+    <line x1="100" y1="64" x2="98" y2="98"/>
+    <line x1="64" y1="100" x2="98" y2="98"/>
+  </g>
+</svg>

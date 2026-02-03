@@ -416,6 +416,14 @@ body {
   width: 100%;
 }
 
+.landing-app-icon {
+  display: block;
+  width: 80px;
+  height: 80px;
+  margin-bottom: 1.25rem;
+  object-fit: contain;
+}
+
 .landing-title-block {
   display: inline-block;
   margin-bottom: 2rem;
