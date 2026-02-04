@@ -112,7 +112,7 @@ jobs:
             DISTRO=$(lsb_release -rs 2>/dev/null || echo "")
             [ "$DISTRO" = "24.04" ] && EXTRA_TAGS="-tags webkit2_41"
           fi
-          wails build --platform ${{ matrix.platform }} -webview2 download -o schemastudio $EXTRA_TAGS
+          wails build --platform ${{ matrix.platform }} -webview2 download $EXTRA_TAGS
 
       - name: Fix macOS permissions and zip app
         if: runner.os == 'macOS'
