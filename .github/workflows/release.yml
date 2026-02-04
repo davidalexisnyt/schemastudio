@@ -129,16 +129,16 @@ jobs:
           VERSION="${{ needs.check-version.outputs.version }}"
           mkdir -p release-asset
           if [ "${{ runner.os }}" = "Windows" ]; then
-            # On Windows, Wails outputs to build/bin/schemastudio.exe
+            # On Windows, Wails outputs to build/bin/schemastudio
             # Use a more reliable method that works with Windows paths in bash
-            if [ -f "build/bin/schemastudio.exe" ]; then
-              exe="build/bin/schemastudio.exe"
+            if [ -f "build/bin/schemastudio" ]; then
+              exe="build/bin/schemastudio"
             else
               # Fallback to find if the standard location doesn't exist
-              exe=$(find build -name "schemastudio.exe" -type f 2>/dev/null | head -1)
+              exe=$(find build -name "schemastudio" -type f 2>/dev/null | head -1)
             fi
             if [ -z "$exe" ] || [ ! -f "$exe" ]; then
-              echo "::error::schemastudio.exe not found"
+              echo "::error::schemastudio not found"
               echo "Checking build directory structure:"
               ls -la build/ 2>/dev/null || echo "build/ does not exist"
               ls -la build/bin/ 2>/dev/null || echo "build/bin/ does not exist"
