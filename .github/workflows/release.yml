@@ -1,6 +1,7 @@
 name: Release
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
 
@@ -74,13 +75,53 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build Wails app
-        uses: dAppServer/wails-build-action@v2.2
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
-          build-name: schemastudio
-          build-platform: ${{ matrix.platform }}
-          package: false
           go-version: "1.23"
+          cache-dependency-path: go.sum
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get -yq update
+          DISTRO=$(lsb_release -rs)
+          if [[ "$DISTRO" == "24.04" ]]; then
+            sudo apt-get -yq install libgtk-3-0 libwebkit2gtk-4.1-dev
+          else
+            sudo apt-get -yq install libgtk-3-0 libwebkit2gtk-4.0-dev
+          fi
+        shell: bash
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.11.0
+        shell: bash
+
+      - name: Build Wails app
+        shell: bash
+        run: |
+          EXTRA_TAGS=""
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            DISTRO=$(lsb_release -rs 2>/dev/null || echo "")
+            [ "$DISTRO" = "24.04" ] && EXTRA_TAGS="-tags webkit2_41"
+          fi
+          wails build --platform ${{ matrix.platform }} -webview2 download -o schemastudio $EXTRA_TAGS
+
+      - name: Fix macOS permissions and zip app
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          chmod +x build/bin/*/Contents/MacOS/* 2>/dev/null || true
+          if [ -d build/bin/schemastudio.app ]; then
+            ditto -c -k --keepParent build/bin/schemastudio.app build/bin/schemastudio.app.zip
+          fi
 
       - name: List build output
         shell: bash
@@ -101,22 +142,25 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create and push tag
         run: |
           VERSION="${{ needs.check-version.outputs.version }}"
           TAG="v${VERSION}"
+          echo "tag=$TAG" >> $GITHUB_ENV
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
             echo "Tag $TAG already exists on remote, skipping push"
           else
-            git tag "$TAG"
+            git tag -a "$TAG" -m "Release $TAG"
             git push origin "$TAG"
           fi
 
@@ -169,9 +213,22 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ needs.check-version.outputs.version }}
-          name: v${{ needs.check-version.outputs.version }}
-          files: release-assets/*
-          generate_release_notes: true
+          tag_name: ${{ env.tag }}
+          name: Release ${{ env.tag }}
+          body: |
+            ## Release ${{ env.tag }}
+
+            ### Artifacts
+            - `schemastudio-${{ needs.check-version.outputs.version }}-windows-amd64.exe` - Windows (amd64)
+            - `schemastudio-${{ needs.check-version.outputs.version }}-linux-amd64` - Linux (amd64)
+            - `schemastudio-${{ needs.check-version.outputs.version }}-darwin-arm64.app.zip` - macOS (ARM64 / Apple Silicon)
+          files: |
+            release-assets/schemastudio-${{ needs.check-version.outputs.version }}-windows-amd64.exe
+            release-assets/schemastudio-${{ needs.check-version.outputs.version }}-linux-amd64
+            release-assets/schemastudio-${{ needs.check-version.outputs.version }}-darwin-arm64.app.zip
+          draft: false
+          prerelease: false
+          make_latest: true
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
