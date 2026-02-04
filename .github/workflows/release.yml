@@ -123,18 +123,36 @@ jobs:
             ditto -c -k --keepParent build/bin/schemastudio.app build/bin/schemastudio.app.zip
           fi
 
-      - name: List build output
+      - name: Prepare versioned artifact (one file per platform)
         shell: bash
         run: |
-          echo "Build output contents:"
-          find build -type f 2>/dev/null || true
-          ls -la build/bin/ 2>/dev/null || ls -la build/ 2>/dev/null || echo "No build dir"
+          VERSION="${{ needs.check-version.outputs.version }}"
+          mkdir -p release-asset
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            exe=$(find build -name "schemastudio.exe" -type f 2>/dev/null | head -1)
+            if [ -z "$exe" ]; then echo "::error::schemastudio.exe not found"; find build -type f 2>/dev/null; exit 1; fi
+            cp "$exe" "release-asset/schemastudio-${VERSION}-windows-amd64.exe"
+          elif [ "${{ runner.os }}" = "Linux" ]; then
+            bin=$(find build -name "schemastudio" -type f 2>/dev/null | head -1)
+            if [ -z "$bin" ]; then echo "::error::schemastudio binary not found"; find build -type f 2>/dev/null; exit 1; fi
+            cp "$bin" "release-asset/schemastudio-${VERSION}-linux-amd64"
+          else
+            if [ -f build/bin/schemastudio.app.zip ]; then
+              cp build/bin/schemastudio.app.zip "release-asset/schemastudio-${VERSION}-darwin-arm64.app.zip"
+            elif [ -d build/bin/schemastudio.app ]; then
+              ditto -c -k --keepParent build/bin/schemastudio.app "release-asset/schemastudio-${VERSION}-darwin-arm64.app.zip"
+            else
+              echo "::error::macOS app not found"; find build -type f 2>/dev/null; exit 1
+            fi
+          fi
+          echo "Release artifact:"
+          ls -la release-asset/
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: build/bin/
+          path: release-asset/
 
   release:
     needs: [check-version, build]
@@ -182,33 +200,17 @@ jobs:
       - name: Prepare release assets
         run: |
           set -e
-          VERSION="${{ needs.check-version.outputs.version }}"
           mkdir -p release-assets
-
-          # Artifacts are in dirs named after the artifact (build-windows, etc.)
-          # Uploaded path was build/bin/ so structure may be build-*/bin/* or build-*/*
-          win_exe=$(find . -path './build-windows*' -name "schemastudio.exe" -type f 2>/dev/null | head -1)
-          linux_bin=$(find . -path './build-linux*' -name "schemastudio" -type f 2>/dev/null | head -1)
-          mac_zip=$(find . -path './build-darwin-arm64*' -name "schemastudio.app.zip" -type f 2>/dev/null | head -1)
-          mac_app=$(find . -path './build-darwin-arm64*' -name "schemastudio.app" -type d 2>/dev/null | head -1)
-
-          if [ -z "$win_exe" ]; then echo "::error::Windows executable not found in artifact"; ls -la build-windows 2>/dev/null || true; exit 1; fi
-          if [ -z "$linux_bin" ]; then echo "::error::Linux binary not found in artifact"; ls -la build-linux 2>/dev/null || true; exit 1; fi
-
-          cp "$win_exe" "release-assets/schemastudio-${VERSION}-windows-amd64.exe"
-          cp "$linux_bin" "release-assets/schemastudio-${VERSION}-linux-amd64"
-
-          if [ -n "$mac_zip" ]; then
-            cp "$mac_zip" "release-assets/schemastudio-${VERSION}-darwin-arm64.app.zip"
-          elif [ -n "$mac_app" ]; then
-            (cd "$(dirname "$mac_app")" && zip -r "$GITHUB_WORKSPACE/release-assets/schemastudio-${VERSION}-darwin-arm64.app.zip" schemastudio.app)
-          else
-            echo "::error::macOS artifact not found (no .app.zip or .app)"
-            ls -la build-darwin-arm64 2>/dev/null || true
-            exit 1
-          fi
+          # Each artifact is a single versioned file (see build job "Prepare versioned artifact")
+          cp build-windows/* release-assets/
+          cp build-linux/* release-assets/
+          cp build-darwin-arm64/* release-assets/
           echo "Release assets:"
           ls -la release-assets/
+          if [ "$(ls -1 release-assets/ | wc -l)" -ne 3 ]; then
+            echo "::error::Expected 3 release assets"
+            exit 1
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -222,10 +224,7 @@ jobs:
             - `schemastudio-${{ needs.check-version.outputs.version }}-windows-amd64.exe` - Windows (amd64)
             - `schemastudio-${{ needs.check-version.outputs.version }}-linux-amd64` - Linux (amd64)
             - `schemastudio-${{ needs.check-version.outputs.version }}-darwin-arm64.app.zip` - macOS (ARM64 / Apple Silicon)
-          files: |
-            release-assets/schemastudio-${{ needs.check-version.outputs.version }}-windows-amd64.exe
-            release-assets/schemastudio-${{ needs.check-version.outputs.version }}-linux-amd64
-            release-assets/schemastudio-${{ needs.check-version.outputs.version }}-darwin-arm64.app.zip
+          files: release-assets/*
           draft: false
           prerelease: false
           make_latest: true
