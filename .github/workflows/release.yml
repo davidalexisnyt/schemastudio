@@ -205,10 +205,10 @@ jobs:
             git push origin "$TAG"
           fi
 
-      - name: Download Windows artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: build-windows
+      # - name: Download Windows artifact
+      #   uses: actions/download-artifact@v4
+      #   with:
+      #     name: build-windows
 
       - name: Download Linux artifact
         uses: actions/download-artifact@v4
@@ -271,7 +271,7 @@ jobs:
             ## Release ${{ env.tag }}
 
             ### Artifacts
-            - `schemastudio-${{ needs.check-version.outputs.version }}-windows-amd64.exe` - Windows (amd64)
+            # - `schemastudio-${{ needs.check-version.outputs.version }}-windows-amd64.exe` - Windows (amd64)
             - `schemastudio-${{ needs.check-version.outputs.version }}-linux-amd64` - Linux (amd64)
             - `schemastudio-${{ needs.check-version.outputs.version }}-darwin-arm64.app.zip` - macOS (ARM64 / Apple Silicon)
           files: release-assets/*
