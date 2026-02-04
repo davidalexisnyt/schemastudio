@@ -17,15 +17,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
       - name: Extract version and detect change
         id: extract
         run: |
-          # Extract version from current main.go: var Version string = "X.Y.Z"
-          current_version=$(sed -n 's/^var Version string = "\([^"]*\)"$/\1/p' main.go | head -1)
+          set -e
+          # Extract version from main.go: var Version string = "X.Y.Z"
+          # Use a permissive pattern (handles CRLF, optional spaces) and trim
+          extract_version() {
+            sed 's/\r$//' "$1" | sed -n 's/.*var Version string = *"\([^"]*\)".*/\1/p' | head -1
+          }
+          current_version=$(extract_version main.go)
           if [ -z "$current_version" ]; then
             echo "Could not extract Version from main.go"
+            cat main.go | head -20
             exit 1
           fi
           echo "version=$current_version" >> "$GITHUB_OUTPUT"
@@ -33,12 +39,14 @@ jobs:
           # Extract version from previous commit (if any)
           previous_version=""
           if git rev-parse HEAD^ >/dev/null 2>&1; then
-            previous_content=$(git show HEAD^:main.go 2>/dev/null || true)
-            if [ -n "$previous_content" ]; then
-              previous_version=$(echo "$previous_content" | sed -n 's/^var Version string = "\([^"]*\)"$/\1/p' | head -1)
+            git show HEAD^:main.go > /tmp/prev_main.go 2>/dev/null || true
+            if [ -f /tmp/prev_main.go ]; then
+              previous_version=$(extract_version /tmp/prev_main.go)
             fi
           fi
 
+          echo "Current version: $current_version"
+          echo "Previous version: $previous_version"
           if [ "$current_version" = "$previous_version" ]; then
             echo "version_changed=false" >> "$GITHUB_OUTPUT"
           else
@@ -74,6 +82,13 @@ jobs:
           package: false
           go-version: "1.23"
 
+      - name: List build output
+        shell: bash
+        run: |
+          echo "Build output contents:"
+          find build -type f 2>/dev/null || true
+          ls -la build/bin/ 2>/dev/null || ls -la build/ 2>/dev/null || echo "No build dir"
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
@@ -98,8 +113,12 @@ jobs:
           TAG="v${VERSION}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "$TAG"
-          git push origin "$TAG"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists on remote, skipping push"
+          else
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
 
       - name: Download Windows artifact
         uses: actions/download-artifact@v4
@@ -118,25 +137,34 @@ jobs:
 
       - name: Prepare release assets
         run: |
+          set -e
           VERSION="${{ needs.check-version.outputs.version }}"
           mkdir -p release-assets
 
-          # Find and copy Windows exe (artifact may preserve build/bin/ structure)
-          win_exe=$(find build-windows -name "schemastudio.exe" -type f | head -1)
-          cp "$win_exe" "release-assets/schemastudio-${VERSION}-windows-amd64.exe"
+          # Artifacts are in dirs named after the artifact (build-windows, etc.)
+          # Uploaded path was build/bin/ so structure may be build-*/bin/* or build-*/*
+          win_exe=$(find . -path './build-windows*' -name "schemastudio.exe" -type f 2>/dev/null | head -1)
+          linux_bin=$(find . -path './build-linux*' -name "schemastudio" -type f 2>/dev/null | head -1)
+          mac_zip=$(find . -path './build-darwin-arm64*' -name "schemastudio.app.zip" -type f 2>/dev/null | head -1)
+          mac_app=$(find . -path './build-darwin-arm64*' -name "schemastudio.app" -type d 2>/dev/null | head -1)
 
-          # Find and copy Linux binary
-          linux_bin=$(find build-linux -name "schemastudio" -type f | head -1)
+          if [ -z "$win_exe" ]; then echo "::error::Windows executable not found in artifact"; ls -la build-windows 2>/dev/null || true; exit 1; fi
+          if [ -z "$linux_bin" ]; then echo "::error::Linux binary not found in artifact"; ls -la build-linux 2>/dev/null || true; exit 1; fi
+
+          cp "$win_exe" "release-assets/schemastudio-${VERSION}-windows-amd64.exe"
           cp "$linux_bin" "release-assets/schemastudio-${VERSION}-linux-amd64"
 
-          # macOS: .app.zip or .app (Wails action creates .app.zip)
-          mac_zip=$(find build-darwin-arm64 -name "schemastudio.app.zip" -type f | head -1)
-          mac_app=$(find build-darwin-arm64 -name "schemastudio.app" -type d | head -1)
           if [ -n "$mac_zip" ]; then
             cp "$mac_zip" "release-assets/schemastudio-${VERSION}-darwin-arm64.app.zip"
           elif [ -n "$mac_app" ]; then
             (cd "$(dirname "$mac_app")" && zip -r "$GITHUB_WORKSPACE/release-assets/schemastudio-${VERSION}-darwin-arm64.app.zip" schemastudio.app)
+          else
+            echo "::error::macOS artifact not found (no .app.zip or .app)"
+            ls -la build-darwin-arm64 2>/dev/null || true
+            exit 1
           fi
+          echo "Release assets:"
+          ls -la release-assets/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
