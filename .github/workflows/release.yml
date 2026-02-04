@@ -112,6 +112,8 @@ jobs:
             DISTRO=$(lsb_release -rs 2>/dev/null || echo "")
             [ "$DISTRO" = "24.04" ] && EXTRA_TAGS="-tags webkit2_41"
           fi
+          echo "build location"
+          pwd
           wails build --platform ${{ matrix.platform }} -webview2 download -o schemastudio $EXTRA_TAGS
 
       - name: Fix macOS permissions and zip app
@@ -127,6 +129,8 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ needs.check-version.outputs.version }}"
+          echo "prep location"
+          pwd
           mkdir -p release-asset
           if [ "${{ runner.os }}" = "Windows" ]; then
             # On Windows, Wails outputs to build/bin/schemastudio
