@@ -55,8 +55,8 @@ jobs:
           fi
 
   build:
-    # needs: check-version
-    # if: needs.check-version.outputs.version_changed == 'true'
+    needs: check-version
+    if: needs.check-version.outputs.version_changed == 'true'
     strategy:
       fail-fast: false
       matrix:
