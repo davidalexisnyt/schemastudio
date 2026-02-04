@@ -1,0 +1,149 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+env:
+  NODE_OPTIONS: "--max-old-space-size=4096"
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.extract.outputs.version }}
+      version_changed: ${{ steps.extract.outputs.version_changed }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Extract version and detect change
+        id: extract
+        run: |
+          # Extract version from current main.go: var Version string = "X.Y.Z"
+          current_version=$(sed -n 's/^var Version string = "\([^"]*\)"$/\1/p' main.go | head -1)
+          if [ -z "$current_version" ]; then
+            echo "Could not extract Version from main.go"
+            exit 1
+          fi
+          echo "version=$current_version" >> "$GITHUB_OUTPUT"
+
+          # Extract version from previous commit (if any)
+          previous_version=""
+          if git rev-parse HEAD^ >/dev/null 2>&1; then
+            previous_content=$(git show HEAD^:main.go 2>/dev/null || true)
+            if [ -n "$previous_content" ]; then
+              previous_version=$(echo "$previous_content" | sed -n 's/^var Version string = "\([^"]*\)"$/\1/p' | head -1)
+            fi
+          fi
+
+          if [ "$current_version" = "$previous_version" ]; then
+            echo "version_changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "version_changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: check-version
+    if: needs.check-version.outputs.version_changed == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows/amd64
+            runner: windows-latest
+            artifact_name: build-windows
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            artifact_name: build-linux
+          - platform: darwin/arm64
+            runner: macos-latest
+            artifact_name: build-darwin-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Wails app
+        uses: dAppServer/wails-build-action@v2.2
+        with:
+          build-name: schemastudio
+          build-platform: ${{ matrix.platform }}
+          package: false
+          go-version: "1.23"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: build/bin/
+
+  release:
+    needs: [check-version, build]
+    if: needs.check-version.outputs.version_changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create and push tag
+        run: |
+          VERSION="${{ needs.check-version.outputs.version }}"
+          TAG="v${VERSION}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG"
+          git push origin "$TAG"
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-windows
+
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-linux
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-darwin-arm64
+
+      - name: Prepare release assets
+        run: |
+          VERSION="${{ needs.check-version.outputs.version }}"
+          mkdir -p release-assets
+
+          # Find and copy Windows exe (artifact may preserve build/bin/ structure)
+          win_exe=$(find build-windows -name "schemastudio.exe" -type f | head -1)
+          cp "$win_exe" "release-assets/schemastudio-${VERSION}-windows-amd64.exe"
+
+          # Find and copy Linux binary
+          linux_bin=$(find build-linux -name "schemastudio" -type f | head -1)
+          cp "$linux_bin" "release-assets/schemastudio-${VERSION}-linux-amd64"
+
+          # macOS: .app.zip or .app (Wails action creates .app.zip)
+          mac_zip=$(find build-darwin-arm64 -name "schemastudio.app.zip" -type f | head -1)
+          mac_app=$(find build-darwin-arm64 -name "schemastudio.app" -type d | head -1)
+          if [ -n "$mac_zip" ]; then
+            cp "$mac_zip" "release-assets/schemastudio-${VERSION}-darwin-arm64.app.zip"
+          elif [ -n "$mac_app" ]; then
+            (cd "$(dirname "$mac_app")" && zip -r "$GITHUB_WORKSPACE/release-assets/schemastudio-${VERSION}-darwin-arm64.app.zip" schemastudio.app)
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.check-version.outputs.version }}
+          name: v${{ needs.check-version.outputs.version }}
+          files: release-assets/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
