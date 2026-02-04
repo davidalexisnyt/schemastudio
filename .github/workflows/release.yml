@@ -57,20 +57,7 @@ jobs:
   build:
     needs: check-version
     if: needs.check-version.outputs.version_changed == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: windows/amd64
-            runner: windows-latest
-            artifact_name: build-windows
-          - platform: linux/amd64
-            runner: ubuntu-latest
-            artifact_name: build-linux
-          - platform: darwin/arm64
-            runner: macos-latest
-            artifact_name: build-darwin-arm64
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -89,14 +76,13 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install Linux dependencies
-        if: runner.os == 'Linux'
         run: |
           sudo apt-get -yq update
           DISTRO=$(lsb_release -rs)
           if [[ "$DISTRO" == "24.04" ]]; then
-            sudo apt-get -yq install libgtk-3-0 libwebkit2gtk-4.1-dev
+            sudo apt-get -yq install libgtk-3-0 libwebkit2gtk-4.1-dev zip
           else
-            sudo apt-get -yq install libgtk-3-0 libwebkit2gtk-4.0-dev
+            sudo apt-get -yq install libgtk-3-0 libwebkit2gtk-4.0-dev zip
           fi
         shell: bash
 
@@ -104,55 +90,98 @@ jobs:
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.11.0
         shell: bash
 
-      - name: Build Wails app
+      - name: Build for Windows amd64
         shell: bash
         run: |
+          rm -rf build/bin
+          DISTRO=$(lsb_release -rs 2>/dev/null || echo "")
           EXTRA_TAGS=""
-          if [ "${{ runner.os }}" = "Linux" ]; then
-            DISTRO=$(lsb_release -rs 2>/dev/null || echo "")
-            [ "$DISTRO" = "24.04" ] && EXTRA_TAGS="-tags webkit2_41"
-          fi
-          wails build --platform ${{ matrix.platform }} -webview2 download $EXTRA_TAGS
-
-      - name: Fix macOS permissions and zip app
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          chmod +x build/bin/*/Contents/MacOS/* 2>/dev/null || true
-          if [ -d build/bin/schemastudio.app ]; then
-            ditto -c -k --keepParent build/bin/schemastudio.app build/bin/schemastudio.app.zip
-          fi
-
-      - name: Prepare versioned artifact (one file per platform)
-        shell: bash
-        run: |
-          VERSION="${{ needs.check-version.outputs.version }}"
-          mkdir -p release-asset
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            exe=$(find build -name "schemastudio.exe" -type f 2>/dev/null | head -1)
-            if [ -z "$exe" ]; then echo "::error::schemastudio.exe not found"; find build -type f 2>/dev/null; exit 1; fi
-            cp "$exe" "release-asset/schemastudio-${VERSION}-windows-amd64.exe"
-          elif [ "${{ runner.os }}" = "Linux" ]; then
-            bin=$(find build -name "schemastudio" -type f 2>/dev/null | head -1)
-            if [ -z "$bin" ]; then echo "::error::schemastudio binary not found"; find build -type f 2>/dev/null; exit 1; fi
-            cp "$bin" "release-asset/schemastudio-${VERSION}-linux-amd64"
+          [ "$DISTRO" = "24.04" ] && EXTRA_TAGS="-tags webkit2_41"
+          wails build --platform windows/amd64 -webview2 download -o schemastudio-windows-amd64 $EXTRA_TAGS
+          # Wails outputs to build/bin/, move to build/ with .exe extension
+          if [ -f build/bin/schemastudio-windows-amd64.exe ]; then
+            mv build/bin/schemastudio-windows-amd64.exe build/schemastudio-windows-amd64.exe
+          elif [ -f build/bin/schemastudio-windows-amd64 ]; then
+            mv build/bin/schemastudio-windows-amd64 build/schemastudio-windows-amd64.exe
           else
-            if [ -f build/bin/schemastudio.app.zip ]; then
-              cp build/bin/schemastudio.app.zip "release-asset/schemastudio-${VERSION}-darwin-arm64.app.zip"
-            elif [ -d build/bin/schemastudio.app ]; then
-              ditto -c -k --keepParent build/bin/schemastudio.app "release-asset/schemastudio-${VERSION}-darwin-arm64.app.zip"
-            else
-              echo "::error::macOS app not found"; find build -type f 2>/dev/null; exit 1
-            fi
+            echo "::error::Windows executable not found after build"
+            find build -type f 2>/dev/null
+            exit 1
           fi
-          echo "Release artifact:"
-          ls -la release-asset/
 
-      - name: Upload build artifact
+      - name: Build for Linux amd64
+        shell: bash
+        run: |
+          rm -rf build/bin
+          DISTRO=$(lsb_release -rs 2>/dev/null || echo "")
+          EXTRA_TAGS=""
+          [ "$DISTRO" = "24.04" ] && EXTRA_TAGS="-tags webkit2_41"
+          wails build --platform linux/amd64 -webview2 download -o schemastudio-linux-amd64 $EXTRA_TAGS
+          # Wails outputs to build/bin/, move to build/
+          if [ -f build/bin/schemastudio-linux-amd64 ]; then
+            mv build/bin/schemastudio-linux-amd64 build/schemastudio-linux-amd64
+          else
+            echo "::error::Linux binary not found after build"
+            find build -type f 2>/dev/null
+            exit 1
+          fi
+
+      - name: Build for Linux arm64
+        shell: bash
+        run: |
+          rm -rf build/bin
+          DISTRO=$(lsb_release -rs 2>/dev/null || echo "")
+          EXTRA_TAGS=""
+          [ "$DISTRO" = "24.04" ] && EXTRA_TAGS="-tags webkit2_41"
+          wails build --platform linux/arm64 -webview2 download -o schemastudio-linux-arm64 $EXTRA_TAGS
+          # Wails outputs to build/bin/, move to build/
+          if [ -f build/bin/schemastudio-linux-arm64 ]; then
+            mv build/bin/schemastudio-linux-arm64 build/schemastudio-linux-arm64
+          else
+            echo "::error::Linux arm64 binary not found after build"
+            find build -type f 2>/dev/null
+            exit 1
+          fi
+
+      - name: Build for macOS arm64
+        shell: bash
+        run: |
+          rm -rf build/bin
+          DISTRO=$(lsb_release -rs 2>/dev/null || echo "")
+          EXTRA_TAGS=""
+          [ "$DISTRO" = "24.04" ] && EXTRA_TAGS="-tags webkit2_41"
+          wails build --platform darwin/arm64 -webview2 download -o schemastudio-darwin-arm64 $EXTRA_TAGS
+          # Wails outputs .app to build/bin/, zip it and move to build/
+          if [ -d build/bin/schemastudio-darwin-arm64.app ]; then
+            cd build/bin && zip -r ../../schemastudio-darwin-arm64.app.zip schemastudio-darwin-arm64.app && cd ../..
+          elif [ -f build/bin/schemastudio-darwin-arm64.app.zip ]; then
+            mv build/bin/schemastudio-darwin-arm64.app.zip build/schemastudio-darwin-arm64.app.zip
+          else
+            echo "::error::macOS app not found after build"
+            find build -type f 2>/dev/null
+            exit 1
+          fi
+
+      - name: Verify build artifacts
+        shell: bash
+        run: |
+          echo "Verifying build artifacts exist..."
+          ls -lh build/schemastudio-* || echo "No artifacts found!"
+          if [ ! -f "build/schemastudio-windows-amd64.exe" ] || [ ! -f "build/schemastudio-linux-amd64" ] || [ ! -f "build/schemastudio-linux-arm64" ] || [ ! -f "build/schemastudio-darwin-arm64.app.zip" ]; then
+            echo "::error::One or more build artifacts are missing!"
+            exit 1
+          fi
+          echo "All build artifacts verified successfully"
+
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
-          path: release-asset/
+          name: build-artifacts
+          path: |
+            build/schemastudio-windows-amd64.exe
+            build/schemastudio-linux-amd64
+            build/schemastudio-linux-arm64
+            build/schemastudio-darwin-arm64.app.zip
 
   release:
     needs: [check-version, build]
@@ -182,35 +211,11 @@ jobs:
             git push origin "$TAG"
           fi
 
-      - name: Download Windows artifact
+      - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
-          name: build-windows
-
-      - name: Download Linux artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: build-linux
-
-      - name: Download macOS artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: build-darwin-arm64
-
-      - name: Prepare release assets
-        run: |
-          set -e
-          mkdir -p release-assets
-          # Each artifact is a single versioned file (see build job "Prepare versioned artifact")
-          cp build-windows/* release-assets/
-          cp build-linux/* release-assets/
-          cp build-darwin-arm64/* release-assets/
-          echo "Release assets:"
-          ls -la release-assets/
-          if [ "$(ls -1 release-assets/ | wc -l)" -ne 3 ]; then
-            echo "::error::Expected 3 release assets"
-            exit 1
-          fi
+          name: build-artifacts
+          path: build/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -221,10 +226,15 @@ jobs:
             ## Release ${{ env.tag }}
 
             ### Artifacts
-            - `schemastudio-${{ needs.check-version.outputs.version }}-windows-amd64.exe` - Windows (amd64)
-            - `schemastudio-${{ needs.check-version.outputs.version }}-linux-amd64` - Linux (amd64)
-            - `schemastudio-${{ needs.check-version.outputs.version }}-darwin-arm64.app.zip` - macOS (ARM64 / Apple Silicon)
-          files: release-assets/*
+            - `schemastudio-windows-amd64.exe` - Windows (amd64)
+            - `schemastudio-linux-amd64` - Linux (amd64)
+            - `schemastudio-linux-arm64` - Linux (arm64)
+            - `schemastudio-darwin-arm64.app.zip` - macOS (ARM64 / Apple Silicon)
+          files: |
+            build/schemastudio-windows-amd64.exe
+            build/schemastudio-linux-amd64
+            build/schemastudio-linux-arm64
+            build/schemastudio-darwin-arm64.app.zip
           draft: false
           prerelease: false
           make_latest: true
