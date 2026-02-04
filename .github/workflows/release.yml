@@ -61,9 +61,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # - platform: windows/amd64
-          #   runner: windows-latest
-          #   artifact_name: build-windows
+          - platform: windows/amd64
+            runner: windows-latest
+            artifact_name: build-windows
           - platform: linux/amd64
             runner: ubuntu-latest
             artifact_name: build-linux
@@ -205,10 +205,10 @@ jobs:
             git push origin "$TAG"
           fi
 
-      # - name: Download Windows artifact
-      #   uses: actions/download-artifact@v4
-      #   with:
-      #     name: build-windows
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-windows
 
       - name: Download Linux artifact
         uses: actions/download-artifact@v4
@@ -226,20 +226,20 @@ jobs:
           mkdir -p release-assets
           # Each artifact is a single versioned file (see build job "Prepare versioned artifact")
           echo "Checking downloaded artifacts:"
-          # echo "build-windows contents:"
-          # ls -la build-windows/ 2>/dev/null || echo "build-windows directory not found or empty"
+          echo "build-windows contents:"
+          ls -la build-windows/ 2>/dev/null || echo "build-windows directory not found or empty"
           echo "build-linux contents:"
           ls -la build-linux/ 2>/dev/null || echo "build-linux directory not found or empty"
           echo "build-darwin-arm64 contents:"
           ls -la build-darwin-arm64/ 2>/dev/null || echo "build-darwin-arm64 directory not found or empty"
 
-          # Copy artifacts with error checking
-          # if [ -d "build-windows" ] && [ "$(ls -A build-windows 2>/dev/null)" ]; then
-          #   cp build-windows/* release-assets/
-          # else
-          #   echo "::error::Windows artifact is missing or empty"
-          #   exit 1
-          # fi
+          Copy artifacts with error checking
+          if [ -d "build-windows" ] && [ "$(ls -A build-windows 2>/dev/null)" ]; then
+            cp build-windows/* release-assets/
+          else
+            echo "::error::Windows artifact is missing or empty"
+            exit 1
+          fi
 
           if [ -d "build-linux" ] && [ "$(ls -A build-linux 2>/dev/null)" ]; then
             cp build-linux/* release-assets/
@@ -271,7 +271,7 @@ jobs:
             ## Release ${{ env.tag }}
 
             ### Artifacts
-            # - `schemastudio-${{ needs.check-version.outputs.version }}-windows-amd64.exe` - Windows (amd64)
+            - `schemastudio-${{ needs.check-version.outputs.version }}-windows-amd64.exe` - Windows (amd64)
             - `schemastudio-${{ needs.check-version.outputs.version }}-linux-amd64` - Linux (amd64)
             - `schemastudio-${{ needs.check-version.outputs.version }}-darwin-arm64.app.zip` - macOS (ARM64 / Apple Silicon)
           files: release-assets/*
