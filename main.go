@@ -11,7 +11,7 @@ import (
 	"schemastudio/internal/app"
 )
 
-var Version string = "0.3.1"
+var Version string = "0.3.2"
 
 //go:embed all:frontend/dist
 var assets embed.FS
