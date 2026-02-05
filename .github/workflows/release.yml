@@ -56,7 +56,7 @@ jobs:
 
   build:
     needs: check-version
-    if: needs.check-version.outputs.version_changed == 'true'
+    # if: needs.check-version.outputs.version_changed == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -112,10 +112,8 @@ jobs:
             DISTRO=$(lsb_release -rs 2>/dev/null || echo "")
             [ "$DISTRO" = "24.04" ] && EXTRA_TAGS="-tags webkit2_41"
           fi
-          echo "build location"
-          pwd
-          wails build --platform ${{ matrix.platform }} -webview2 download -o schemastudio $EXTRA_TAGS
-          ls -la /d/a/schemastudio/schemastudio/build/bin/
+          wails build --platform ${{ matrix.platform }} -webview2 download $EXTRA_TAGS
+          ls -la build/bin/
 
       - name: Fix macOS permissions and zip app
         if: runner.os == 'macOS'
@@ -132,13 +130,12 @@ jobs:
           VERSION="${{ needs.check-version.outputs.version }}"
           echo "prep location"
           pwd
-          ls -lR /d/a/schemastudio/schemastudio/build
           mkdir -p release-asset
           if [ "${{ runner.os }}" = "Windows" ]; then
             # On Windows, Wails outputs to build/bin/schemastudio
             # Use a more reliable method that works with Windows paths in bash
-            if [ -f "/d/a/schemastudio/schemastudio/build/bin/schemastudio*.exe" ]; then
-              exe="/d/a/schemastudio/schemastudio/build/bin/schemastudio"
+            if [ -f "build/bin/schemastudio*.exe" ]; then
+              exe="build/bin/schemastudio*.exe"
             else
               # Fallback to find if the standard location doesn't exist
               exe=$(find build -name "schemastudio" -type f 2>/dev/null | head -1)
@@ -185,7 +182,7 @@ jobs:
 
   release:
     needs: [check-version, build]
-    if: needs.check-version.outputs.version_changed == 'true'
+    # if: needs.check-version.outputs.version_changed == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -211,62 +208,57 @@ jobs:
             git push origin "$TAG"
           fi
 
-      - name: Download Windows artifact
+      - name: Download all artifacts from the build jobs
         uses: actions/download-artifact@v4
         with:
-          name: build-windows
+          path: release-assets
+      # - name: Download Windows artifact
+      #   uses: actions/download-artifact@v4
+      #   with:
+      #     name: build-windows
 
-      - name: Download Linux artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: build-linux
+      # - name: Download Linux artifact
+      #   uses: actions/download-artifact@v4
+      #   with:
+      #     name: build-linux
 
-      - name: Download macOS artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: build-darwin-arm64
+      # - name: Download macOS artifact
+      #   uses: actions/download-artifact@v4
+      #   with:
+      #     name: build-darwin-arm64
 
-      - name: Prepare release assets
-        run: |
-          set -e
-          mkdir -p release-assets
-          # Each artifact is a single versioned file (see build job "Prepare versioned artifact")
-          echo "Checking downloaded artifacts:"
-          echo "build-windows contents:"
-          ls -la build-windows/ 2>/dev/null || echo "build-windows directory not found or empty"
-          echo "build-linux contents:"
-          ls -la build-linux/ 2>/dev/null || echo "build-linux directory not found or empty"
-          echo "build-darwin-arm64 contents:"
-          ls -la build-darwin-arm64/ 2>/dev/null || echo "build-darwin-arm64 directory not found or empty"
+      # - name: Prepare release assets
+      #   run: |
+      #     set -e
+      #     # Each artifact is a single versioned file (see build job "Prepare versioned artifact")
+      #     Copy artifacts with error checking
+      #     if [ -d "build-windows" ] && [ "$(ls -A build-windows 2>/dev/null)" ]; then
+      #       cp build-windows/* release-assets/
+      #     else
+      #       echo "::error::Windows artifact is missing or empty"
+      #       exit 1
+      #     fi
 
-          Copy artifacts with error checking
-          if [ -d "build-windows" ] && [ "$(ls -A build-windows 2>/dev/null)" ]; then
-            cp build-windows/* release-assets/
-          else
-            echo "::error::Windows artifact is missing or empty"
-            exit 1
-          fi
+      #     if [ -d "build-linux" ] && [ "$(ls -A build-linux 2>/dev/null)" ]; then
+      #       cp build-linux/* release-assets/
+      #     else
+      #       echo "::error::Linux artifact is missing or empty"
+      #       exit 1
+      #     fi
 
-          if [ -d "build-linux" ] && [ "$(ls -A build-linux 2>/dev/null)" ]; then
-            cp build-linux/* release-assets/
-          else
-            echo "::error::Linux artifact is missing or empty"
-            exit 1
-          fi
+      #     if [ -d "build-darwin-arm64" ] && [ "$(ls -A build-darwin-arm64 2>/dev/null)" ]; then
+      #       cp build-darwin-arm64/* release-assets/
+      #     else
+      #       echo "::error::macOS artifact is missing or empty"
+      #       exit 1
+      #     fi
 
-          if [ -d "build-darwin-arm64" ] && [ "$(ls -A build-darwin-arm64 2>/dev/null)" ]; then
-            cp build-darwin-arm64/* release-assets/
-          else
-            echo "::error::macOS artifact is missing or empty"
-            exit 1
-          fi
-
-          echo "Release assets:"
-          ls -la release-assets/
-          if [ "$(ls -1 release-assets/ | wc -l)" -ne 3 ]; then
-            echo "::error::Expected 3 release assets, found $(ls -1 release-assets/ | wc -l)"
-            exit 1
-          fi
+      #     echo "Release assets:"
+      #     ls -la release-assets/
+      #     if [ "$(ls -1 release-assets/ | wc -l)" -ne 3 ]; then
+      #       echo "::error::Expected 3 release assets, found $(ls -1 release-assets/ | wc -l)"
+      #       exit 1
+      #     fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -277,10 +269,10 @@ jobs:
             ## Release ${{ env.tag }}
 
             ### Artifacts
-            - `schemastudio-${{ needs.check-version.outputs.version }}-windows-amd64.exe` - Windows (amd64)
-            - `schemastudio-${{ needs.check-version.outputs.version }}-linux-amd64` - Linux (amd64)
-            - `schemastudio-${{ needs.check-version.outputs.version }}-darwin-arm64.app.zip` - macOS (ARM64 / Apple Silicon)
-          files: release-assets/*
+            # - `schemastudio-${{ needs.check-version.outputs.version }}-windows-amd64.exe` - Windows (amd64)
+            # - `schemastudio-${{ needs.check-version.outputs.version }}-linux-amd64` - Linux (amd64)
+            # - `schemastudio-${{ needs.check-version.outputs.version }}-darwin-arm64.app.zip` - macOS (ARM64 / Apple Silicon)
+          files: release-assets/**/*
           draft: false
           prerelease: false
           make_latest: true
