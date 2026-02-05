@@ -898,6 +898,145 @@ body {
   box-sizing: border-box;
 }
 
+.canvas-text-block {
+  cursor: move;
+  pointer-events: all;
+}
+
+.canvas-text-block-border {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 1;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.canvas-text-block:hover .canvas-text-block-border,
+.canvas-text-block-resizing .canvas-text-block-border {
+  opacity: 1;
+}
+
+.canvas-text-block-handles {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.canvas-text-block:hover .canvas-text-block-handles,
+.canvas-text-block-resizing .canvas-text-block-handles {
+  pointer-events: all;
+}
+
+.canvas-text-block:hover .canvas-text-block-handles {
+  opacity: 1;
+}
+
+.canvas-text-block-resizing .canvas-text-block-handles {
+  opacity: 0;
+}
+
+.canvas-text-block-handle {
+  fill: transparent;
+  stroke: none;
+}
+
+.canvas-text-block-handle-left,
+.canvas-text-block-handle-right {
+  cursor: ew-resize;
+}
+
+.canvas-text-block-handle-top,
+.canvas-text-block-handle-bottom {
+  cursor: ns-resize;
+}
+
+.canvas-text-block-has-svg {
+  color: var(--text);
+}
+
+.canvas-text-block-svg-text {
+  fill: currentColor;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.canvas-text-block-svg-text text {
+  fill: currentColor;
+}
+
+.canvas-text-block-inner {
+  margin: 0;
+  padding: 4px 0;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  overflow: visible;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  box-sizing: border-box;
+  line-height: 1.4;
+}
+
+.canvas-text-block-markdown {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+.canvas-text-block-markdown h1,
+.canvas-text-block-markdown h2,
+.canvas-text-block-markdown h3,
+.canvas-text-block-markdown h4,
+.canvas-text-block-markdown h5,
+.canvas-text-block-markdown h6 {
+  margin: 0.5em 0 0.25em;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.canvas-text-block-markdown h1:first-child,
+.canvas-text-block-markdown h2:first-child,
+.canvas-text-block-markdown h3:first-child,
+.canvas-text-block-markdown h4:first-child,
+.canvas-text-block-markdown h5:first-child,
+.canvas-text-block-markdown h6:first-child {
+  margin-top: 0;
+}
+
+.canvas-text-block-markdown p {
+  margin: 0.4em 0;
+}
+
+.canvas-text-block-markdown ul,
+.canvas-text-block-markdown ol {
+  margin: 0.4em 0;
+  padding-left: 1.5em;
+}
+
+.canvas-text-block-markdown li {
+  margin: 0.2em 0;
+}
+
+.canvas-text-block-markdown code {
+  font-family: ui-monospace, monospace;
+  font-size: 0.9em;
+}
+
+.canvas-text-block-markdown pre {
+  margin: 0.5em 0;
+  overflow-x: auto;
+}
+
+.canvas-text-block-markdown pre code {
+  display: block;
+  padding: 0.5em;
+}
+
+.canvas-text-block-markdown blockquote {
+  margin: 0.5em 0;
+  padding-left: 1em;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+}
+
 .toast {
   position: fixed;
   bottom: 1rem;
@@ -1467,6 +1606,39 @@ body {
 }
 
 .modal-panel-note-editor .modal-note-editor-footer button {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.modal-panel-text-block-editor {
+  display: flex;
+  flex-direction: column;
+  max-height: 85vh;
+  overflow: hidden;
+}
+
+.modal-panel-text-block-editor .modal-text-block-editor-content {
+  flex: 1;
+  min-height: 0;
+  margin: 0.5rem 0;
+}
+
+.modal-panel-text-block-editor .modal-text-block-editor-footer {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+  margin-top: 0.5rem;
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.modal-panel-text-block-editor .modal-text-block-editor-footer button {
   padding: 0.4rem 0.75rem;
   border: 1px solid var(--border);
   border-radius: 6px;

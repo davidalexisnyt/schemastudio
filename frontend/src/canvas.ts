@@ -37,14 +37,14 @@ export function getTableWidth(table: Table): number {
   const contentWidth = Math.max(headerWidth, fieldsWidth);
   return Math.max(
     TABLE_WIDTH,
-    TABLE_PADDING_LEFT + Math.ceil(contentWidth) + TABLE_PADDING_RIGHT,
+    TABLE_PADDING_LEFT + Math.ceil(contentWidth) + TABLE_PADDING_RIGHT
   );
 }
 
 export function getFieldAnchor(
   table: Table,
   fieldIndex: number,
-  side: TableSide,
+  side: TableSide
 ): { x: number; y: number } {
   const w = getTableWidth(table);
   const fieldY =
@@ -79,7 +79,7 @@ function getTableCenter(table: Table): { x: number; y: number } {
 function pickBestSide(
   fromTable: Table,
   fromFieldIndex: number,
-  toCenter: { x: number; y: number },
+  toCenter: { x: number; y: number }
 ): TableSide {
   const sides: TableSide[] = ["left", "right", "top", "bottom"];
   let best: TableSide = "right";
@@ -101,7 +101,7 @@ function pickBestSide(
 function getFieldGroupAnchor(
   table: Table,
   fieldIndices: number[],
-  side: TableSide,
+  side: TableSide
 ): { x: number; y: number } {
   const w = getTableWidth(table);
   const h = getTableHeight(table);
@@ -127,7 +127,7 @@ function getFieldGroupAnchor(
 function pickBestSideForGroup(
   table: Table,
   fieldIndices: number[],
-  toPoint: { x: number; y: number },
+  toPoint: { x: number; y: number }
 ): TableSide {
   const sides: TableSide[] = ["left", "right", "top", "bottom"];
   let best: TableSide = "right";
@@ -155,7 +155,7 @@ function getSingleRelationshipPath(
   sourceTableId: string,
   sourceFieldId: string,
   targetTableId: string,
-  targetFieldId: string,
+  targetFieldId: string
 ): RelationshipPathResult | null {
   const srcT = d.tables.find((t) => t.id === sourceTableId);
   const tgtT = d.tables.find((t) => t.id === targetTableId);
@@ -210,7 +210,7 @@ function getCompoundRelationshipPath(
   sourceTableId: string,
   sourceFieldIds: string[],
   targetTableId: string,
-  targetFieldIds: string[],
+  targetFieldIds: string[]
 ): RelationshipPathResult | null {
   const srcT = d.tables.find((t) => t.id === sourceTableId);
   const tgtT = d.tables.find((t) => t.id === targetTableId);
@@ -270,7 +270,7 @@ export function getRelationshipPaths(d: Diagram, r: Relationship): string[] {
 
 export function getRelationshipPathData(
   d: Diagram,
-  r: Relationship,
+  r: Relationship
 ): RelationshipPathResult[] {
   if (r.sourceFieldIds?.length && r.targetFieldIds?.length) {
     const p = getCompoundRelationshipPath(
@@ -278,7 +278,7 @@ export function getRelationshipPathData(
       r.sourceTableId,
       r.sourceFieldIds,
       r.targetTableId,
-      r.targetFieldIds,
+      r.targetFieldIds
     );
     return p ? [p] : [];
   }
@@ -287,7 +287,7 @@ export function getRelationshipPathData(
     r.sourceTableId,
     r.sourceFieldId,
     r.targetTableId,
-    r.targetFieldId,
+    r.targetFieldId
   );
   return p ? [p] : [];
 }

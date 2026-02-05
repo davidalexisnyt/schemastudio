@@ -67,11 +67,23 @@ export interface Note {
   height?: number;
 }
 
+export interface TextBlock {
+  id: string;
+  x: number;
+  y: number;
+  text: string;
+  width?: number;
+  height?: number;
+  fontSize?: number;
+  useMarkdown?: boolean;
+}
+
 export interface Diagram {
   version: number;
   tables: Table[];
   relationships: Relationship[];
   notes?: Note[];
+  textBlocks?: TextBlock[];
   viewport?: Viewport;
 }
 

@@ -4,6 +4,7 @@ import type {
   Field,
   Relationship,
   Note,
+  TextBlock,
   Viewport,
 } from "./types";
 import { getTableWidth } from "./canvas";
@@ -21,6 +22,7 @@ export function createEmptyDiagram(): Diagram {
     tables: [],
     relationships: [],
     notes: [],
+    textBlocks: [],
     viewport: undefined,
   };
 }
@@ -37,6 +39,7 @@ export class Store {
       ? JSON.parse(JSON.stringify(initial))
       : createEmptyDiagram();
     if (!this.diagram.notes) this.diagram.notes = [];
+    if (!this.diagram.textBlocks) this.diagram.textBlocks = [];
   }
 
   getDiagram(): Diagram {
@@ -72,6 +75,7 @@ export class Store {
     this.pushUndo();
     const copy = JSON.parse(JSON.stringify(d)) as Diagram;
     if (!copy.notes) copy.notes = [];
+    if (!copy.textBlocks) copy.textBlocks = [];
     copy.tables.forEach((t) => {
       t.fields.forEach((f) => {
         f.type = f.type?.toLowerCase() ?? "text";
@@ -442,6 +446,74 @@ export class Store {
     this.pushUndo();
     if (!this.diagram.notes) return;
     this.diagram.notes = this.diagram.notes.filter((n) => n.id !== noteId);
+    this.notify();
+  }
+
+  addTextBlock(
+    x: number,
+    y: number,
+    text: string,
+    options?: { width?: number; fontSize?: number; useMarkdown?: boolean }
+  ): TextBlock {
+    this.pushUndo();
+    const tb: TextBlock = {
+      id: nextId("tb"),
+      x,
+      y,
+      text: text ?? "",
+      width: options?.width,
+      fontSize: options?.fontSize,
+      useMarkdown: options?.useMarkdown ?? false,
+    };
+    if (!this.diagram.textBlocks) this.diagram.textBlocks = [];
+    this.diagram.textBlocks.push(tb);
+    this.notify();
+    return tb;
+  }
+
+  updateTextBlock(
+    textBlockId: string,
+    text: string,
+    options?: { width?: number; fontSize?: number; useMarkdown?: boolean }
+  ): void {
+    const tb = this.diagram.textBlocks?.find((x) => x.id === textBlockId);
+    if (!tb) return;
+    this.pushUndo();
+    tb.text = text;
+    if (options?.width !== undefined) tb.width = options.width;
+    if (options?.fontSize !== undefined) tb.fontSize = options.fontSize;
+    if (options?.useMarkdown !== undefined) tb.useMarkdown = options.useMarkdown;
+    this.notify();
+  }
+
+  updateTextBlockPosition(textBlockId: string, x: number, y: number): void {
+    const tb = this.diagram.textBlocks?.find((x) => x.id === textBlockId);
+    if (!tb) return;
+    tb.x = x;
+    tb.y = y;
+    this.dirty = true;
+    this.notify();
+  }
+
+  updateTextBlockSize(
+    textBlockId: string,
+    width: number,
+    height?: number
+  ): void {
+    const tb = this.diagram.textBlocks?.find((x) => x.id === textBlockId);
+    if (!tb) return;
+    tb.width = width;
+    if (height !== undefined) tb.height = height;
+    this.dirty = true;
+    this.notify();
+  }
+
+  deleteTextBlock(textBlockId: string): void {
+    this.pushUndo();
+    if (!this.diagram.textBlocks) return;
+    this.diagram.textBlocks = this.diagram.textBlocks.filter(
+      (tb) => tb.id !== textBlockId
+    );
     this.notify();
   }
 

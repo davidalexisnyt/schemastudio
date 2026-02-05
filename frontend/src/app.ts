@@ -10,6 +10,7 @@ import type {
   CatalogRelationship,
   WorkspaceUIState,
   TableCatalog,
+  TextBlock,
 } from "./types";
 import { Store, createEmptyDiagram } from "./store";
 import { FIELD_TYPES, CARDINALITY_OPTIONS } from "./types";
@@ -22,6 +23,10 @@ import {
   HEADER_HEIGHT,
 } from "./canvas";
 import * as bridge from "./bridge";
+import {
+  markdownToSvgLines,
+  measureMarkdownSvg,
+} from "./markdown";
 
 let store: Store;
 let selection: Selection = null;
@@ -34,6 +39,11 @@ let dragStart = { x: 0, y: 0 };
 let dragNoteId: string | null = null;
 let dragNoteStart = { x: 0, y: 0 };
 let resizeNoteId: string | null = null;
+let dragTextBlockId: string | null = null;
+let dragTextBlockStart = { x: 0, y: 0 };
+let resizeTextBlockId: string | null = null;
+let resizeTextBlockEdge: "left" | "right" | "top" | "bottom" | null = null;
+let resizeTextBlockStart = { x: 0, y: 0, w: 0, h: 0 };
 let connectSource: { tableId: string; fieldId: string } | null = null;
 let connectLine: { x: number; y: number } | null = null;
 let container: HTMLElement;
@@ -42,11 +52,16 @@ let transformGroup: SVGGElement;
 let tablesLayer: SVGGElement;
 let relationshipsLayer: SVGGElement;
 let notesLayer: SVGGElement;
+let textBlocksLayer: SVGGElement;
 const NOTE_DEFAULT_WIDTH = 200;
 const NOTE_DEFAULT_HEIGHT = 140;
 const MIN_NOTE_WIDTH = 80;
 const MIN_NOTE_HEIGHT = 60;
 const NOTE_RESIZE_HANDLE_SIZE = 14;
+const TEXT_BLOCK_DEFAULT_WIDTH = 280;
+const TEXT_BLOCK_DEFAULT_FONT_SIZE = 14;
+const MIN_TEXT_BLOCK_WIDTH = 60;
+const TEXT_BLOCK_PADDING = 16; /* 1rem */
 const EDGE_SCROLL_ZONE = 48;
 const EDGE_SCROLL_SPEED = 8;
 let tempLine: SVGPathElement | null = null;
@@ -258,11 +273,40 @@ function screenToDiagram(sx: number, sy: number): { x: number; y: number } {
   return { x, y };
 }
 
+let textBlockMeasureContainer: HTMLElement | null = null;
+
+function measureTextBlockContent(
+  block: TextBlock,
+  constrainWidth?: number
+): { width: number; height: number } {
+  const fontSize = block.fontSize ?? TEXT_BLOCK_DEFAULT_FONT_SIZE;
+  if (block.useMarkdown && block.text?.trim()) {
+    return measureMarkdownSvg(block.text, fontSize, constrainWidth);
+  }
+  if (!textBlockMeasureContainer) {
+    textBlockMeasureContainer = document.createElement("div");
+    textBlockMeasureContainer.style.cssText =
+      "position:fixed;left:-9999px;top:0;visibility:hidden;pointer-events:none;";
+    document.body.appendChild(textBlockMeasureContainer);
+  }
+  const outer = document.createElement("div");
+  outer.className = "canvas-text-block-inner";
+  outer.style.fontSize = `${fontSize}px`;
+  if (constrainWidth !== undefined) outer.style.width = `${constrainWidth}px`;
+  outer.textContent = block.text?.trim() || "X";
+  textBlockMeasureContainer.appendChild(outer);
+  const width = outer.offsetWidth;
+  const height = outer.offsetHeight;
+  textBlockMeasureContainer.removeChild(outer);
+  return { width, height };
+}
+
 function render(): void {
   const d = store.getDiagram();
   tablesLayer.innerHTML = "";
   relationshipsLayer.innerHTML = "";
   notesLayer.innerHTML = "";
+  textBlocksLayer.innerHTML = "";
 
   d.relationships.forEach((r) => {
     const pathDataList = getRelationshipPathData(d, r);
@@ -382,6 +426,176 @@ function render(): void {
       showNoteEditor(note.x, note.y, note.id);
     });
     notesLayer.appendChild(noteG);
+  });
+
+  (d.textBlocks ?? []).forEach((block) => {
+    try {
+      const constrainW = block.width;
+      const measured = measureTextBlockContent(block, constrainW);
+      const w = Math.max(
+        MIN_TEXT_BLOCK_WIDTH,
+        block.width ?? measured.width
+      );
+      const h = block.height ?? measured.height + TEXT_BLOCK_PADDING;
+
+      const blockG = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    blockG.setAttribute(
+      "class",
+      "canvas-text-block" +
+        (resizeTextBlockId === block.id ? " canvas-text-block-resizing" : "")
+    );
+    blockG.setAttribute("data-text-block-id", block.id);
+    blockG.setAttribute("transform", `translate(${block.x}, ${block.y})`);
+    const fontSize = block.fontSize ?? TEXT_BLOCK_DEFAULT_FONT_SIZE;
+    if (block.useMarkdown) {
+      if (block.text?.trim()) {
+        let svgLines = markdownToSvgLines(block.text, fontSize, w);
+        if (svgLines.length === 0) {
+          svgLines = [
+            {
+              text: block.text.trim(),
+              fontSize,
+              fontWeight: "normal",
+            },
+          ];
+        }
+        const lineHeight = 1.35;
+        const padding = 4;
+        let y = padding + (svgLines[0]?.fontSize ?? fontSize) * 0.85;
+        const textG = document.createElementNS(
+          "http://www.w3.org/2000/svg",
+          "g"
+        );
+        textG.setAttribute("class", "canvas-text-block-svg-text");
+        for (const line of svgLines) {
+          const t = document.createElementNS(
+            "http://www.w3.org/2000/svg",
+            "text"
+          );
+          t.setAttribute("x", "0");
+          t.setAttribute("y", String(y));
+          t.setAttribute("font-size", String(line.fontSize));
+          t.setAttribute("font-weight", line.fontWeight);
+          t.setAttribute("fill", "currentColor");
+          t.textContent = line.text;
+          textG.appendChild(t);
+          y += line.fontSize * lineHeight;
+        }
+        blockG.classList.add("canvas-text-block-has-svg");
+        blockG.appendChild(textG);
+      } else {
+        const fo = document.createElementNS(
+          "http://www.w3.org/2000/svg",
+          "foreignObject"
+        );
+        fo.setAttribute("width", String(w));
+        fo.setAttribute("height", String(h));
+        fo.setAttribute("x", "0");
+        fo.setAttribute("y", "0");
+        const div = document.createElement("div");
+        div.className = "canvas-text-block-inner";
+        div.style.fontSize = `${fontSize}px`;
+        div.textContent = "Double-click to edit";
+        fo.appendChild(div);
+        blockG.appendChild(fo);
+      }
+    } else {
+      const fo = document.createElementNS(
+        "http://www.w3.org/2000/svg",
+        "foreignObject"
+      );
+      fo.setAttribute("width", String(w));
+      fo.setAttribute("height", String(h));
+      fo.setAttribute("x", "0");
+      fo.setAttribute("y", "0");
+      const div = document.createElement("div");
+      div.className = "canvas-text-block-inner";
+      div.style.fontSize = `${fontSize}px`;
+      div.style.width = `${w}px`;
+      div.textContent = block.text?.trim() || "Double-click to edit";
+      fo.appendChild(div);
+      blockG.appendChild(fo);
+    }
+
+    const borderRect = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "rect"
+    );
+    borderRect.setAttribute("class", "canvas-text-block-border");
+    borderRect.setAttribute("width", String(w));
+    borderRect.setAttribute("height", String(h));
+    borderRect.setAttribute("x", "0");
+    borderRect.setAttribute("y", "0");
+    blockG.appendChild(borderRect);
+
+    const handleSize = 4;
+    const handlesG = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    handlesG.setAttribute("class", "canvas-text-block-handles");
+    const edges: ("left" | "right" | "top" | "bottom")[] = [
+      "left",
+      "right",
+      "top",
+      "bottom",
+    ];
+    edges.forEach((edge) => {
+      const rect = document.createElementNS(
+        "http://www.w3.org/2000/svg",
+        "rect"
+      );
+      rect.setAttribute("class", `canvas-text-block-handle canvas-text-block-handle-${edge}`);
+      rect.setAttribute("data-edge", edge);
+      if (edge === "left") {
+        rect.setAttribute("x", "0");
+        rect.setAttribute("y", "0");
+        rect.setAttribute("width", String(handleSize));
+        rect.setAttribute("height", String(h));
+      } else if (edge === "right") {
+        rect.setAttribute("x", String(w - handleSize));
+        rect.setAttribute("y", "0");
+        rect.setAttribute("width", String(handleSize));
+        rect.setAttribute("height", String(h));
+      } else if (edge === "top") {
+        rect.setAttribute("x", "0");
+        rect.setAttribute("y", "0");
+        rect.setAttribute("width", String(w));
+        rect.setAttribute("height", String(handleSize));
+      } else {
+        rect.setAttribute("x", "0");
+        rect.setAttribute("y", String(h - handleSize));
+        rect.setAttribute("width", String(w));
+        rect.setAttribute("height", String(handleSize));
+      }
+      rect.addEventListener("mousedown", (e) => {
+        if (e.button !== 0) return;
+        e.stopPropagation();
+        e.preventDefault();
+        resizeTextBlockId = block.id;
+        resizeTextBlockEdge = edge;
+        resizeTextBlockStart = { x: block.x, y: block.y, w, h };
+        setupDocumentDragListeners();
+      });
+      handlesG.appendChild(rect);
+    });
+    blockG.appendChild(handlesG);
+
+    blockG.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return;
+      if ((e.target as Element).closest(".canvas-text-block-handle")) return;
+      e.stopPropagation();
+      const pt = screenToDiagram(e.clientX, e.clientY);
+      dragTextBlockId = block.id;
+      dragTextBlockStart = { x: pt.x - block.x, y: pt.y - block.y };
+      setupDocumentDragListeners();
+    });
+    blockG.addEventListener("dblclick", (e) => {
+      if ((e.target as Element).closest(".canvas-text-block-handle")) return;
+      e.stopPropagation();
+      showTextBlockEditor(block.x, block.y, block.id);
+    });
+    textBlocksLayer.appendChild(blockG);
+    } catch {
+      /* Skip this text block so render can continue and tables are drawn */
+    }
   });
 
   d.tables.forEach((t) => {
@@ -584,17 +798,66 @@ function onDocumentDragMove(e: MouseEvent): void {
       pt.x - dragNoteStart.x,
       pt.y - dragNoteStart.y
     );
+    return;
+  }
+  if (dragTextBlockId) {
+    const pt = screenToDiagram(e.clientX, e.clientY);
+    store.updateTextBlockPosition(
+      dragTextBlockId,
+      pt.x - dragTextBlockStart.x,
+      pt.y - dragTextBlockStart.y
+    );
+    return;
+  }
+  if (resizeTextBlockId && resizeTextBlockEdge) {
+    const pt = screenToDiagram(e.clientX, e.clientY);
+    const block = store
+      .getDiagram()
+      .textBlocks?.find((tb) => tb.id === resizeTextBlockId);
+    if (block) {
+      const { x, y, w, h } = resizeTextBlockStart;
+      if (resizeTextBlockEdge === "right") {
+        const newW = Math.max(MIN_TEXT_BLOCK_WIDTH, pt.x - block.x);
+        store.updateTextBlockSize(resizeTextBlockId, newW);
+      } else if (resizeTextBlockEdge === "left") {
+        const newW = Math.max(
+          MIN_TEXT_BLOCK_WIDTH,
+          x + w - pt.x
+        );
+        store.updateTextBlockPosition(resizeTextBlockId, pt.x, block.y);
+        store.updateTextBlockSize(resizeTextBlockId, newW);
+      } else if (resizeTextBlockEdge === "bottom") {
+        const newH = Math.max(TEXT_BLOCK_PADDING + 20, pt.y - block.y);
+        store.updateTextBlockSize(resizeTextBlockId, block.width ?? w, newH);
+      } else {
+        const newH = Math.max(
+          TEXT_BLOCK_PADDING + 20,
+          y + h - pt.y
+        );
+        store.updateTextBlockPosition(resizeTextBlockId, block.x, pt.y);
+        store.updateTextBlockSize(resizeTextBlockId, block.width ?? w, newH);
+      }
+    }
   }
 }
 
 function onDocumentDragUp(): void {
-  if (dragTableId === null && dragNoteId === null && resizeNoteId === null)
+  if (
+    dragTableId === null &&
+    dragNoteId === null &&
+    resizeNoteId === null &&
+    dragTextBlockId === null &&
+    resizeTextBlockId === null
+  )
     return;
   document.removeEventListener("mousemove", onDocumentDragMove);
   document.removeEventListener("mouseup", onDocumentDragUp);
   dragTableId = null;
   dragNoteId = null;
   resizeNoteId = null;
+  dragTextBlockId = null;
+  resizeTextBlockId = null;
+  resizeTextBlockEdge = null;
 }
 
 function setupDocumentDragListeners(): void {
@@ -1710,6 +1973,8 @@ function setupCanvas(): void {
   transformGroup.appendChild(tablesLayer);
   notesLayer = document.createElementNS("http://www.w3.org/2000/svg", "g");
   transformGroup.appendChild(notesLayer);
+  textBlocksLayer = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  transformGroup.appendChild(textBlocksLayer);
   svg.appendChild(transformGroup);
   wrap.appendChild(svg);
   container.appendChild(wrap);
@@ -1763,6 +2028,7 @@ function setupCanvas(): void {
   svg.addEventListener("mousedown", (e) => {
     if (e.button !== 0) return;
     if ((e.target as Element).closest("g.canvas-note")) return;
+    if ((e.target as Element).closest("g.canvas-text-block")) return;
     const closestTable = (e.target as Element).closest("g.table-group");
     if (
       e.target === svg ||
@@ -1820,6 +2086,43 @@ function setupCanvas(): void {
       );
       return;
     }
+    if (dragTextBlockId) {
+      const pt = screenToDiagram(e.clientX, e.clientY);
+      store.updateTextBlockPosition(
+        dragTextBlockId,
+        pt.x - dragTextBlockStart.x,
+        pt.y - dragTextBlockStart.y
+      );
+      return;
+    }
+    if (resizeTextBlockId && resizeTextBlockEdge) {
+      const pt = screenToDiagram(e.clientX, e.clientY);
+      const block = store
+        .getDiagram()
+        .textBlocks?.find((tb) => tb.id === resizeTextBlockId);
+      if (block) {
+        const { x, y, w, h } = resizeTextBlockStart;
+        if (resizeTextBlockEdge === "right") {
+          const newW = Math.max(MIN_TEXT_BLOCK_WIDTH, pt.x - block.x);
+          store.updateTextBlockSize(resizeTextBlockId, newW);
+        } else if (resizeTextBlockEdge === "left") {
+          const newW = Math.max(MIN_TEXT_BLOCK_WIDTH, x + w - pt.x);
+          store.updateTextBlockPosition(resizeTextBlockId, pt.x, block.y);
+          store.updateTextBlockSize(resizeTextBlockId, newW);
+        } else if (resizeTextBlockEdge === "bottom") {
+          const newH = Math.max(TEXT_BLOCK_PADDING + 20, pt.y - block.y);
+          store.updateTextBlockSize(resizeTextBlockId, block.width ?? w, newH);
+        } else {
+          const newH = Math.max(
+            TEXT_BLOCK_PADDING + 20,
+            y + h - pt.y
+          );
+          store.updateTextBlockPosition(resizeTextBlockId, block.x, pt.y);
+          store.updateTextBlockSize(resizeTextBlockId, block.width ?? w, newH);
+        }
+      }
+      return;
+    }
     if (connectSource && connectLine) {
       const pt = screenToDiagram(e.clientX, e.clientY);
       connectLine.x = pt.x;
@@ -1862,6 +2165,9 @@ function setupCanvas(): void {
     }
     dragNoteId = null;
     resizeNoteId = null;
+    dragTextBlockId = null;
+    resizeTextBlockId = null;
+    resizeTextBlockEdge = null;
   });
 
   svg.addEventListener("mouseleave", () => {
@@ -1893,6 +2199,7 @@ function setupCanvas(): void {
     const tableG = target.closest("g.table-group");
     const fieldRow = target.closest("[data-field-id]");
     const noteEl = target.closest("g.canvas-note");
+    const textBlockEl = target.closest("g.canvas-text-block");
     if (relPath) {
       const id = (relPath as HTMLElement).dataset.relationshipId!;
       const rel = store.getDiagram().relationships.find((x) => x.id === id);
@@ -1982,6 +2289,29 @@ function setupCanvas(): void {
           ]);
         }
       }
+    } else if (textBlockEl) {
+      const textBlockId = (textBlockEl as HTMLElement).dataset.textBlockId;
+      if (textBlockId) {
+        const block = store
+          .getDiagram()
+          .textBlocks?.find((tb) => tb.id === textBlockId);
+        if (block) {
+          showContextMenu(e.clientX, e.clientY, [
+            {
+              label: "Edit",
+              fn: () => showTextBlockEditor(block.x, block.y, block.id),
+            },
+            {
+              label: "Delete",
+              danger: true,
+              fn: () => {
+                store.deleteTextBlock(textBlockId);
+                setSelection(null);
+              },
+            },
+          ]);
+        }
+      }
     } else {
       const pt = screenToDiagram(e.clientX, e.clientY);
       showContextMenu(e.clientX, e.clientY, [
@@ -1992,6 +2322,10 @@ function setupCanvas(): void {
         {
           label: "Add Note",
           fn: () => showNoteEditor(pt.x, pt.y, null),
+        },
+        {
+          label: "Add Text Block",
+          fn: () => showTextBlockEditor(pt.x, pt.y, null),
         },
       ]);
     }
@@ -3395,6 +3729,125 @@ function showNoteEditor(
     }
     overlay.remove();
     render();
+  };
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.textContent = "Cancel";
+  cancelBtn.onclick = () => overlay.remove();
+  footerDiv.appendChild(okBtn);
+  footerDiv.appendChild(cancelBtn);
+  panel.appendChild(footerDiv);
+  overlay.appendChild(panel);
+  document.body.appendChild(overlay);
+}
+
+function showTextBlockEditor(
+  canvasX: number,
+  canvasY: number,
+  textBlockId: string | null
+): void {
+  const existing = document.querySelector(".modal-overlay");
+  if (existing) existing.remove();
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  const panel = document.createElement("div");
+  panel.className = "modal-panel modal-panel-text-block-editor";
+  const headerDiv = document.createElement("div");
+  headerDiv.className = "modal-header";
+  const title = document.createElement("h2");
+  title.textContent = textBlockId ? "Edit Text Block" : "New Text Block";
+  headerDiv.appendChild(title);
+  panel.appendChild(headerDiv);
+  const contentDiv = document.createElement("div");
+  contentDiv.className = "modal-text-block-editor-content";
+
+  const textLabel = document.createElement("label");
+  textLabel.textContent = "Text";
+  textLabel.style.display = "block";
+  textLabel.style.marginTop = "0.5rem";
+  contentDiv.appendChild(textLabel);
+  const textarea = document.createElement("textarea");
+  textarea.className = "modal-input modal-textarea";
+  textarea.rows = 6;
+  textarea.placeholder = "Enter text (titles, descriptions, etc.)...";
+  if (textBlockId) {
+    const block = store
+      .getDiagram()
+      .textBlocks?.find((tb) => tb.id === textBlockId);
+    if (block) textarea.value = block.text;
+  }
+  contentDiv.appendChild(textarea);
+
+  const fontSizeLabel = document.createElement("label");
+  fontSizeLabel.textContent = "Font size";
+  fontSizeLabel.style.display = "block";
+  fontSizeLabel.style.marginTop = "0.75rem";
+  contentDiv.appendChild(fontSizeLabel);
+  const fontSizeInput = document.createElement("input");
+  fontSizeInput.type = "number";
+  fontSizeInput.className = "modal-input";
+  fontSizeInput.min = "8";
+  fontSizeInput.max = "72";
+  fontSizeInput.step = "1";
+  if (textBlockId) {
+    const block = store
+      .getDiagram()
+      .textBlocks?.find((tb) => tb.id === textBlockId);
+    fontSizeInput.value = String(block?.fontSize ?? TEXT_BLOCK_DEFAULT_FONT_SIZE);
+  } else {
+    fontSizeInput.value = String(TEXT_BLOCK_DEFAULT_FONT_SIZE);
+  }
+  contentDiv.appendChild(fontSizeInput);
+
+  const useMarkdownLabel = document.createElement("label");
+  useMarkdownLabel.style.display = "flex";
+  useMarkdownLabel.style.alignItems = "center";
+  useMarkdownLabel.style.gap = "0.5rem";
+  useMarkdownLabel.style.marginTop = "0.75rem";
+  const useMarkdownCheck = document.createElement("input");
+  useMarkdownCheck.type = "checkbox";
+  useMarkdownCheck.checked = false;
+  if (textBlockId) {
+    const block = store
+      .getDiagram()
+      .textBlocks?.find((tb) => tb.id === textBlockId);
+    if (block) useMarkdownCheck.checked = block.useMarkdown ?? false;
+  }
+  useMarkdownLabel.appendChild(useMarkdownCheck);
+  useMarkdownLabel.appendChild(
+    document.createTextNode("Use Markdown (headers, lists, etc.)")
+  );
+  contentDiv.appendChild(useMarkdownLabel);
+
+  panel.appendChild(contentDiv);
+  const footerDiv = document.createElement("div");
+  footerDiv.className = "modal-text-block-editor-footer";
+  const okBtn = document.createElement("button");
+  okBtn.type = "button";
+  okBtn.textContent = "OK";
+  okBtn.onclick = () => {
+    try {
+      const text = textarea.value.trim();
+      const fontSize = Math.min(
+        72,
+        Math.max(8, parseInt(fontSizeInput.value, 10) || TEXT_BLOCK_DEFAULT_FONT_SIZE)
+      );
+      const useMarkdown = useMarkdownCheck.checked;
+      if (textBlockId) {
+        store.updateTextBlock(textBlockId, text, {
+          fontSize,
+          useMarkdown,
+        });
+      } else {
+        store.addTextBlock(canvasX, canvasY, text, {
+          fontSize,
+          useMarkdown,
+        });
+      }
+      render();
+    } finally {
+      overlay.remove();
+    }
   };
   const cancelBtn = document.createElement("button");
   cancelBtn.type = "button";
