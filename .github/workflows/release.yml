@@ -113,7 +113,6 @@ jobs:
             [ "$DISTRO" = "24.04" ] && EXTRA_TAGS="-tags webkit2_41"
           fi
           wails build --platform ${{ matrix.platform }} -webview2 download $EXTRA_TAGS
-          ls -la build/bin/
 
       - name: Fix macOS permissions and zip app
         if: runner.os == 'macOS'
@@ -129,13 +128,12 @@ jobs:
         run: |
           VERSION="${{ needs.check-version.outputs.version }}"
           echo "prep location"
-          pwd
           mkdir -p release-asset
           if [ "${{ runner.os }}" = "Windows" ]; then
             # On Windows, Wails outputs to build/bin/schemastudio
             # Use a more reliable method that works with Windows paths in bash
-            if [ -f "build/bin/schemastudio*.exe" ]; then
-              exe="build/bin/schemastudio*.exe"
+            if [ -f "build/bin/schemastudio.exe" ]; then
+              exe="build/bin/schemastudio.exe"
             else
               # Fallback to find if the standard location doesn't exist
               exe=$(find build -name "schemastudio" -type f 2>/dev/null | head -1)
