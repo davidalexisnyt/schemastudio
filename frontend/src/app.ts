@@ -19,8 +19,10 @@ import {
   getFieldAnchor,
   getTableWidth,
   getTableFieldColumnStart,
+  getFieldNameX,
   ROW_HEIGHT,
   HEADER_HEIGHT,
+  PK_GUTTER,
 } from "./canvas";
 import * as bridge from "./bridge";
 import {
@@ -651,6 +653,7 @@ function render(): void {
     g.appendChild(header);
 
     const typeColumnStart = getTableFieldColumnStart(t);
+    const fieldNameX = getFieldNameX();
     t.fields.forEach((f, i) => {
       const rowY = HEADER_HEIGHT + (i + 1) * ROW_HEIGHT - 6;
       const fieldClass =
@@ -668,11 +671,51 @@ function render(): void {
       rowGroup.dataset.fieldId = f.id;
       rowGroup.style.cursor = "pointer";
 
+      // Primary key icon in the gutter
+      if (f.primaryKey) {
+        const pkIcon = document.createElementNS(
+          "http://www.w3.org/2000/svg",
+          "g"
+        );
+        // Position the key icon in the gutter: centered in the PK_GUTTER area
+        const iconX = 10 + PK_GUTTER / 2;
+        const iconY = rowY - 4; // vertically center relative to the text baseline
+        pkIcon.setAttribute(
+          "transform",
+          `translate(${iconX}, ${iconY}) scale(0.55)`
+        );
+        pkIcon.setAttribute("class", "table-field-pk-icon");
+        // Key icon path: a simple key shape (circle head + shaft + teeth)
+        const keyPath = document.createElementNS(
+          "http://www.w3.org/2000/svg",
+          "path"
+        );
+        keyPath.setAttribute(
+          "d",
+          "M-4,-4 a4,4 0 1,1 4,4 l8,0 l0,3 l-2,0 l0,-2 l-2,0 l0,2 l-2,0 l0,-3 l-2,0 a4,4 0 0,1 -4,-4 Z"
+        );
+        keyPath.setAttribute("fill", "none");
+        keyPath.setAttribute("stroke", "currentColor");
+        keyPath.setAttribute("stroke-width", "1.5");
+        pkIcon.appendChild(keyPath);
+        // Small dot in the center of the key head
+        const dot = document.createElementNS(
+          "http://www.w3.org/2000/svg",
+          "circle"
+        );
+        dot.setAttribute("cx", "-2");
+        dot.setAttribute("cy", "-2");
+        dot.setAttribute("r", "1.2");
+        dot.setAttribute("fill", "currentColor");
+        pkIcon.appendChild(dot);
+        rowGroup.appendChild(pkIcon);
+      }
+
       const nameText = document.createElementNS(
         "http://www.w3.org/2000/svg",
         "text"
       );
-      nameText.setAttribute("x", "10");
+      nameText.setAttribute("x", String(fieldNameX));
       nameText.setAttribute("y", String(rowY));
       nameText.setAttribute("class", fieldClass);
       nameText.textContent = f.name;
@@ -1476,6 +1519,7 @@ const EXPORT_CANVAS_STYLES = `
   .table-header-line { stroke: #bcc0cc !important; }
   .table-header { fill: #1e66f5 !important; font-family: system-ui, -apple-system, sans-serif !important; font-size: 14px !important; font-weight: 600 !important; }
   .table-field { fill: #4c4f69 !important; font-family: system-ui, -apple-system, sans-serif !important; font-size: 12px !important; }
+  .table-field-pk-icon { color: #1e66f5 !important; }
   .relationship-path { stroke: #bcc0cc !important; fill: none !important; }
   .relationship-path.selected { stroke: #1e66f5 !important; }
   .relationship-arrowhead { fill: #bcc0cc !important; stroke: none !important; }
@@ -1648,6 +1692,624 @@ async function exportSVG(): Promise<void> {
     download("schema.svg", data, "image/svg+xml");
     showToast("Exported SVG");
   }
+}
+
+// --- Database connection dialog ---
+
+interface DbConnectionConfig {
+  driver: string;
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  password: string;
+  sslMode: string;
+  project: string;
+  dataset: string;
+  credentialsFile: string;
+  bigqueryAuthMode: string;
+}
+
+function defaultDbConfig(): DbConnectionConfig {
+  return {
+    driver: "postgres",
+    host: "localhost",
+    port: 5432,
+    database: "",
+    username: "",
+    password: "",
+    sslMode: "",
+    project: "",
+    dataset: "",
+    credentialsFile: "",
+    bigqueryAuthMode: "service_account",
+  };
+}
+
+const DRIVER_DEFAULT_PORTS: Record<string, number> = {
+  postgres: 5432,
+  mysql: 3306,
+  mssql: 1433,
+  bigquery: 0,
+};
+
+async function openDatabaseConnectionDialog(): Promise<void> {
+  if (!bridge.isBackendAvailable()) {
+    showToast("Backend not available (run in Wails)");
+    return;
+  }
+
+  const existing = document.querySelector(".modal-overlay");
+  if (existing) existing.remove();
+
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  const panel = document.createElement("div");
+  panel.className = "modal-panel modal-panel-dbconn";
+
+  // Header
+  const headerDiv = document.createElement("div");
+  headerDiv.className = "modal-dbconn-header";
+  const title = document.createElement("h2");
+  title.className = "modal-title";
+  title.textContent = "Import from Database";
+  headerDiv.appendChild(title);
+  panel.appendChild(headerDiv);
+
+  // Content
+  const contentDiv = document.createElement("div");
+  contentDiv.className = "modal-dbconn-content";
+
+  const cfg = defaultDbConfig();
+
+  // Saved profiles row
+  const profileRow = document.createElement("div");
+  profileRow.className = "modal-dbconn-profile-row";
+  const profileLabel = document.createElement("label");
+  profileLabel.textContent = "Saved Connection";
+  const profileSelect = document.createElement("select");
+  profileSelect.className = "modal-input";
+  const defaultOpt = document.createElement("option");
+  defaultOpt.value = "";
+  defaultOpt.textContent = "(new connection)";
+  profileSelect.appendChild(defaultOpt);
+  profileRow.appendChild(profileLabel);
+  profileRow.appendChild(profileSelect);
+  contentDiv.appendChild(profileRow);
+
+  // Load saved profiles
+  try {
+    const profilesJSON = await bridge.listConnectionProfiles();
+    const profiles = JSON.parse(profilesJSON) as string[];
+    for (const p of profiles) {
+      const opt = document.createElement("option");
+      opt.value = p;
+      opt.textContent = p;
+      profileSelect.appendChild(opt);
+    }
+  } catch (_) {
+    // No saved profiles
+  }
+
+  // Driver selector
+  const driverRow = document.createElement("div");
+  driverRow.className = "modal-dbconn-row";
+  const driverLabel = document.createElement("label");
+  driverLabel.textContent = "Database Type";
+  const driverSelect = document.createElement("select");
+  driverSelect.className = "modal-input";
+  for (const [value, label] of [
+    ["postgres", "PostgreSQL"],
+    ["mysql", "MySQL"],
+    ["mssql", "SQL Server"],
+    ["bigquery", "BigQuery"],
+  ]) {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    driverSelect.appendChild(opt);
+  }
+  driverRow.appendChild(driverLabel);
+  driverRow.appendChild(driverSelect);
+  contentDiv.appendChild(driverRow);
+
+  // RDBMS fields container
+  const rdbmsFields = document.createElement("div");
+  rdbmsFields.className = "modal-dbconn-rdbms-fields";
+
+  const hostRow = document.createElement("div");
+  hostRow.className = "modal-dbconn-row";
+  const hostLabel = document.createElement("label");
+  hostLabel.textContent = "Host";
+  const hostInput = document.createElement("input");
+  hostInput.type = "text";
+  hostInput.className = "modal-input";
+  hostInput.placeholder = "localhost";
+  hostInput.value = cfg.host;
+  hostRow.appendChild(hostLabel);
+  hostRow.appendChild(hostInput);
+  rdbmsFields.appendChild(hostRow);
+
+  const portRow = document.createElement("div");
+  portRow.className = "modal-dbconn-row";
+  const portLabel = document.createElement("label");
+  portLabel.textContent = "Port";
+  const portInput = document.createElement("input");
+  portInput.type = "number";
+  portInput.className = "modal-input";
+  portInput.value = String(cfg.port);
+  portRow.appendChild(portLabel);
+  portRow.appendChild(portInput);
+  rdbmsFields.appendChild(portRow);
+
+  const dbRow = document.createElement("div");
+  dbRow.className = "modal-dbconn-row";
+  const dbLabel = document.createElement("label");
+  dbLabel.textContent = "Database";
+  const dbInput = document.createElement("input");
+  dbInput.type = "text";
+  dbInput.className = "modal-input";
+  dbInput.placeholder = "mydb";
+  dbRow.appendChild(dbLabel);
+  dbRow.appendChild(dbInput);
+  rdbmsFields.appendChild(dbRow);
+
+  const userRow = document.createElement("div");
+  userRow.className = "modal-dbconn-row";
+  const userLabel = document.createElement("label");
+  userLabel.textContent = "Username";
+  const userInput = document.createElement("input");
+  userInput.type = "text";
+  userInput.className = "modal-input";
+  userRow.appendChild(userLabel);
+  userRow.appendChild(userInput);
+  rdbmsFields.appendChild(userRow);
+
+  const passRow = document.createElement("div");
+  passRow.className = "modal-dbconn-row";
+  const passLabel = document.createElement("label");
+  passLabel.textContent = "Password";
+  const passInput = document.createElement("input");
+  passInput.type = "password";
+  passInput.className = "modal-input";
+  passRow.appendChild(passLabel);
+  passRow.appendChild(passInput);
+  rdbmsFields.appendChild(passRow);
+
+  const sslRow = document.createElement("div");
+  sslRow.className = "modal-dbconn-row";
+  const sslLabel = document.createElement("label");
+  sslLabel.textContent = "SSL Mode";
+  const sslSelect = document.createElement("select");
+  sslSelect.className = "modal-input";
+  for (const v of ["", "disable", "prefer", "require"]) {
+    const opt = document.createElement("option");
+    opt.value = v;
+    opt.textContent = v || "(default)";
+    sslSelect.appendChild(opt);
+  }
+  sslRow.appendChild(sslLabel);
+  sslRow.appendChild(sslSelect);
+  rdbmsFields.appendChild(sslRow);
+
+  contentDiv.appendChild(rdbmsFields);
+
+  // BigQuery fields container
+  const bqFields = document.createElement("div");
+  bqFields.className = "modal-dbconn-bq-fields";
+  bqFields.style.display = "none";
+
+  const projectRow = document.createElement("div");
+  projectRow.className = "modal-dbconn-row";
+  const projectLabel = document.createElement("label");
+  projectLabel.textContent = "GCP Project";
+  const projectInput = document.createElement("input");
+  projectInput.type = "text";
+  projectInput.className = "modal-input";
+  projectInput.placeholder = "my-project-id";
+  projectRow.appendChild(projectLabel);
+  projectRow.appendChild(projectInput);
+  bqFields.appendChild(projectRow);
+
+  // BigQuery auth mode toggle
+  const bqAuthRow = document.createElement("div");
+  bqAuthRow.className = "modal-dbconn-row";
+  const bqAuthLabel = document.createElement("label");
+  bqAuthLabel.textContent = "Authentication";
+  const bqAuthSelect = document.createElement("select");
+  bqAuthSelect.className = "modal-input";
+  const saOpt = document.createElement("option");
+  saOpt.value = "service_account";
+  saOpt.textContent = "Service Account (JSON key file)";
+  const oauthOpt = document.createElement("option");
+  oauthOpt.value = "user_oauth";
+  oauthOpt.textContent = "Sign in with Google";
+  bqAuthSelect.appendChild(saOpt);
+  bqAuthSelect.appendChild(oauthOpt);
+  bqAuthRow.appendChild(bqAuthLabel);
+  bqAuthRow.appendChild(bqAuthSelect);
+  bqFields.appendChild(bqAuthRow);
+
+  // Service account file picker
+  const saFileRow = document.createElement("div");
+  saFileRow.className = "modal-dbconn-row modal-dbconn-sa-row";
+  const saFileLabel = document.createElement("label");
+  saFileLabel.textContent = "Credentials File";
+  const saFileDiv = document.createElement("div");
+  saFileDiv.className = "modal-dbconn-file-picker";
+  const saFileInput = document.createElement("input");
+  saFileInput.type = "text";
+  saFileInput.className = "modal-input";
+  saFileInput.placeholder = "path/to/service-account.json";
+  saFileInput.readOnly = true;
+  const saFileBrowse = document.createElement("button");
+  saFileBrowse.type = "button";
+  saFileBrowse.textContent = "Browse...";
+  saFileBrowse.className = "modal-dbconn-btn-sm";
+  saFileBrowse.onclick = async () => {
+    try {
+      const path = await bridge.openFileDialog(
+        "Select Service Account JSON",
+        "JSON",
+        "*.json"
+      );
+      if (path) saFileInput.value = path;
+    } catch (_) {
+      /* cancelled */
+    }
+  };
+  saFileDiv.appendChild(saFileInput);
+  saFileDiv.appendChild(saFileBrowse);
+  saFileRow.appendChild(saFileLabel);
+  saFileRow.appendChild(saFileDiv);
+  bqFields.appendChild(saFileRow);
+
+  // OAuth sign-in row
+  const oauthRow = document.createElement("div");
+  oauthRow.className = "modal-dbconn-row modal-dbconn-oauth-row";
+  oauthRow.style.display = "none";
+  const oauthBtn = document.createElement("button");
+  oauthBtn.type = "button";
+  oauthBtn.className = "modal-dbconn-btn";
+  oauthBtn.textContent = "Sign in with Google";
+  const oauthStatus = document.createElement("span");
+  oauthStatus.className = "modal-dbconn-oauth-status";
+  oauthRow.appendChild(oauthBtn);
+  oauthRow.appendChild(oauthStatus);
+  bqFields.appendChild(oauthRow);
+
+  bqAuthSelect.addEventListener("change", () => {
+    const isOAuth = bqAuthSelect.value === "user_oauth";
+    saFileRow.style.display = isOAuth ? "none" : "";
+    oauthRow.style.display = isOAuth ? "flex" : "none";
+  });
+
+  oauthBtn.onclick = async () => {
+    try {
+      oauthStatus.textContent = "Starting authentication...";
+      const bqCfg: DbConnectionConfig = {
+        ...defaultDbConfig(),
+        driver: "bigquery",
+        project: projectInput.value.trim(),
+        bigqueryAuthMode: "user_oauth",
+      };
+      const authURL = await bridge.startBigQueryOAuth(JSON.stringify(bqCfg));
+      if (authURL) {
+        // Open the auth URL in the system browser via Wails
+        window.open(authURL, "_blank");
+        oauthStatus.textContent = "Waiting for sign-in... Complete it in the browser window.";
+      }
+    } catch (e) {
+      oauthStatus.textContent = `Error: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  };
+
+  contentDiv.appendChild(bqFields);
+
+  // Driver change handler
+  driverSelect.addEventListener("change", () => {
+    const isBQ = driverSelect.value === "bigquery";
+    rdbmsFields.style.display = isBQ ? "none" : "";
+    bqFields.style.display = isBQ ? "" : "none";
+    portInput.value = String(DRIVER_DEFAULT_PORTS[driverSelect.value] || 0);
+  });
+
+  // Profile load handler
+  profileSelect.addEventListener("change", async () => {
+    if (!profileSelect.value) return;
+    try {
+      const json = await bridge.loadConnectionProfile(profileSelect.value);
+      const loaded = JSON.parse(json) as DbConnectionConfig;
+      driverSelect.value = loaded.driver;
+      driverSelect.dispatchEvent(new Event("change"));
+      hostInput.value = loaded.host || "";
+      portInput.value = String(loaded.port || DRIVER_DEFAULT_PORTS[loaded.driver] || 0);
+      dbInput.value = loaded.database || "";
+      userInput.value = loaded.username || "";
+      // Try to load password from OS keyring
+      passInput.value = "";
+      try {
+        const pw = await bridge.loadProfilePassword(profileSelect.value);
+        if (pw) passInput.value = pw;
+      } catch (_) {
+        // No saved password in keyring
+      }
+      sslSelect.value = loaded.sslMode || "";
+      projectInput.value = loaded.project || "";
+      bqAuthSelect.value = loaded.bigqueryAuthMode || "service_account";
+      bqAuthSelect.dispatchEvent(new Event("change"));
+      saFileInput.value = loaded.credentialsFile || "";
+    } catch (e) {
+      appendStatus(`Failed to load profile: ${e instanceof Error ? e.message : String(e)}`, "error");
+    }
+  });
+
+  panel.appendChild(contentDiv);
+
+  // Test connection area
+  const testRow = document.createElement("div");
+  testRow.className = "modal-dbconn-test-row";
+  const testBtn = document.createElement("button");
+  testBtn.type = "button";
+  testBtn.className = "modal-dbconn-btn";
+  testBtn.textContent = "Test Connection";
+  const testStatus = document.createElement("span");
+  testStatus.className = "modal-dbconn-test-status";
+  testRow.appendChild(testBtn);
+  testRow.appendChild(testStatus);
+  panel.appendChild(testRow);
+
+  // Schema/table selection area (hidden until connection tested)
+  const selectionArea = document.createElement("div");
+  selectionArea.className = "modal-dbconn-selection";
+  selectionArea.style.display = "none";
+
+  const schemaRow = document.createElement("div");
+  schemaRow.className = "modal-dbconn-row";
+  const schemaLabel = document.createElement("label");
+  schemaLabel.textContent = "Schema";
+  const schemaSelect = document.createElement("select");
+  schemaSelect.className = "modal-input";
+  schemaRow.appendChild(schemaLabel);
+  schemaRow.appendChild(schemaSelect);
+  selectionArea.appendChild(schemaRow);
+
+  const tableHeader = document.createElement("div");
+  tableHeader.className = "modal-dbconn-table-header";
+  const tableLabel = document.createElement("label");
+  tableLabel.textContent = "Tables";
+  const selectAllBtn = document.createElement("button");
+  selectAllBtn.type = "button";
+  selectAllBtn.className = "modal-dbconn-btn-sm";
+  selectAllBtn.textContent = "Select All";
+  tableHeader.appendChild(tableLabel);
+  tableHeader.appendChild(selectAllBtn);
+  selectionArea.appendChild(tableHeader);
+
+  const tableList = document.createElement("div");
+  tableList.className = "modal-dbconn-table-list";
+  selectionArea.appendChild(tableList);
+
+  panel.appendChild(selectionArea);
+
+  function getConfig(): DbConnectionConfig {
+    const isBQ = driverSelect.value === "bigquery";
+    return {
+      driver: driverSelect.value,
+      host: isBQ ? "" : hostInput.value.trim(),
+      port: isBQ ? 0 : parseInt(portInput.value) || 0,
+      database: isBQ ? "" : dbInput.value.trim(),
+      username: isBQ ? "" : userInput.value.trim(),
+      password: isBQ ? "" : passInput.value,
+      sslMode: isBQ ? "" : sslSelect.value,
+      project: isBQ ? projectInput.value.trim() : "",
+      dataset: "",
+      credentialsFile: isBQ && bqAuthSelect.value === "service_account" ? saFileInput.value : "",
+      bigqueryAuthMode: isBQ ? bqAuthSelect.value : "",
+    };
+  }
+
+  // Test connection
+  testBtn.onclick = async () => {
+    try {
+      testStatus.textContent = "Testing...";
+      testStatus.className = "modal-dbconn-test-status";
+      const cfgJSON = JSON.stringify(getConfig());
+      const result = await bridge.testDatabaseConnection(cfgJSON);
+      testStatus.textContent = result;
+      testStatus.className = "modal-dbconn-test-status modal-dbconn-test-ok";
+
+      // Load schemas
+      const schemasJSON = await bridge.listDatabaseSchemas(cfgJSON);
+      const schemas = JSON.parse(schemasJSON) as string[];
+      schemaSelect.innerHTML = "";
+      for (const s of schemas) {
+        const opt = document.createElement("option");
+        opt.value = s;
+        opt.textContent = s;
+        schemaSelect.appendChild(opt);
+      }
+      if (schemas.length > 0) {
+        selectionArea.style.display = "";
+        // Auto-select first schema and load tables
+        schemaSelect.dispatchEvent(new Event("change"));
+      }
+    } catch (e) {
+      testStatus.textContent = `Error: ${e instanceof Error ? e.message : String(e)}`;
+      testStatus.className = "modal-dbconn-test-status modal-dbconn-test-err";
+      selectionArea.style.display = "none";
+    }
+  };
+
+  // Schema change -> load tables
+  schemaSelect.addEventListener("change", async () => {
+    const schema = schemaSelect.value;
+    if (!schema) return;
+    try {
+      tableList.innerHTML = '<div style="color: var(--muted); font-size:0.85rem; padding:0.5rem;">Loading tables...</div>';
+      const cfgJSON = JSON.stringify(getConfig());
+      const tablesJSON = await bridge.listDatabaseTables(cfgJSON, schema);
+      const tables = JSON.parse(tablesJSON) as string[];
+      tableList.innerHTML = "";
+      if (tables.length === 0) {
+        tableList.innerHTML = '<div style="color: var(--muted); font-size:0.85rem; padding:0.5rem;">No tables found.</div>';
+        return;
+      }
+      for (const t of tables) {
+        const row = document.createElement("label");
+        row.className = "modal-dbconn-table-item";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.value = t;
+        cb.checked = true;
+        const span = document.createElement("span");
+        span.textContent = t;
+        row.appendChild(cb);
+        row.appendChild(span);
+        tableList.appendChild(row);
+      }
+    } catch (e) {
+      tableList.innerHTML = `<div style="color: var(--danger); font-size:0.85rem; padding:0.5rem;">Error: ${e instanceof Error ? e.message : String(e)}</div>`;
+    }
+  });
+
+  // Select All toggle
+  let allSelected = true;
+  selectAllBtn.onclick = () => {
+    allSelected = !allSelected;
+    selectAllBtn.textContent = allSelected ? "Deselect All" : "Select All";
+    const checkboxes = tableList.querySelectorAll<HTMLInputElement>("input[type=checkbox]");
+    checkboxes.forEach((cb) => (cb.checked = allSelected));
+  };
+
+  // Footer
+  const footerDiv = document.createElement("div");
+  footerDiv.className = "modal-dbconn-footer";
+  const footerLeft = document.createElement("div");
+  footerLeft.className = "modal-dbconn-footer-left";
+  const saveProfileBtn = document.createElement("button");
+  saveProfileBtn.type = "button";
+  saveProfileBtn.className = "modal-dbconn-btn-sm";
+  saveProfileBtn.textContent = "Save Profile";
+  saveProfileBtn.onclick = async () => {
+    const name = prompt("Connection profile name:");
+    if (!name) return;
+    try {
+      const cfgToSave = getConfig();
+      const password = cfgToSave.password;
+      cfgToSave.password = ""; // Don't save password to profile file
+      await bridge.saveConnectionProfile(name, JSON.stringify(cfgToSave));
+      // Save password to OS keyring if non-empty
+      if (password) {
+        try {
+          await bridge.saveProfilePassword(name, password);
+        } catch (_) {
+          appendStatus("Could not save password to OS credential manager", "error");
+        }
+      }
+      showToast("Profile saved");
+      // Add to dropdown if not already present
+      const opts = Array.from(profileSelect.options).map((o) => o.value);
+      if (!opts.includes(name)) {
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = name;
+        profileSelect.appendChild(opt);
+      }
+    } catch (e) {
+      showToast(`Save failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+  footerLeft.appendChild(saveProfileBtn);
+
+  const footerRight = document.createElement("div");
+  footerRight.className = "modal-dbconn-footer-right";
+  const importBtn = document.createElement("button");
+  importBtn.type = "button";
+  importBtn.className = "modal-dbconn-btn modal-dbconn-btn-primary";
+  importBtn.textContent = "Import";
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.className = "modal-dbconn-btn";
+  cancelBtn.textContent = "Cancel";
+  cancelBtn.onclick = () => overlay.remove();
+
+  importBtn.onclick = async () => {
+    const selectedTables: string[] = [];
+    const checkboxes = tableList.querySelectorAll<HTMLInputElement>("input[type=checkbox]:checked");
+    checkboxes.forEach((cb) => selectedTables.push(cb.value));
+    if (selectedTables.length === 0) {
+      showToast("No tables selected");
+      return;
+    }
+    try {
+      importBtn.textContent = "Importing...";
+      importBtn.disabled = true;
+      const cfgJSON = JSON.stringify(getConfig());
+      const json = await bridge.importFromDatabase(
+        cfgJSON,
+        schemaSelect.value,
+        JSON.stringify(selectedTables)
+      );
+      overlay.remove();
+      const catalog = JSON.parse(json) as TableCatalog;
+      const tables = catalog?.tables ?? [];
+      const relationships = catalog?.relationships ?? [];
+      const doc = getActiveDoc();
+      if (doc?.type === "workspace") {
+        const w = doc as WorkspaceDoc;
+        for (const table of tables) {
+          const catalogId = nextCatalogId();
+          w.catalogTables.push({
+            id: catalogId,
+            name: table.name,
+            fields: table.fields.map((f) => ({
+              id: f.id,
+              name: f.name,
+              type: f.type,
+              nullable: f.nullable,
+              primaryKey: f.primaryKey,
+            })),
+          });
+        }
+        await saveTableCatalog(w.rootPath, w.catalogTables);
+        bindActiveTab();
+        refreshTabStrip();
+        updateEditorContentVisibility();
+        renderWorkspaceView();
+        appendStatus(
+          `Imported from database: ${catalog.tables.length} tables, ${relationships.length} relationships`
+        );
+        showToast("Imported from database");
+      } else {
+        const d: Diagram = {
+          version: 1,
+          tables,
+          relationships,
+        };
+        store.setDiagram(d);
+        appendStatus(
+          `Imported from database: ${d.tables.length} tables, ${d.relationships.length} relationships`
+        );
+        showToast("Imported from database");
+      }
+    } catch (e) {
+      importBtn.textContent = "Import";
+      importBtn.disabled = false;
+      const msg = e instanceof Error ? e.message : String(e);
+      appendStatus(`Database import failed: ${msg}`, "error");
+      showToast("Import failed");
+    }
+  };
+
+  footerRight.appendChild(importBtn);
+  footerRight.appendChild(cancelBtn);
+  footerDiv.appendChild(footerLeft);
+  footerDiv.appendChild(footerRight);
+  panel.appendChild(footerDiv);
+
+  overlay.appendChild(panel);
+  document.body.appendChild(overlay);
 }
 
 async function openAndImportJSON(): Promise<void> {
@@ -5179,6 +5841,54 @@ function showWorkspaceSettingsModal(w: WorkspaceDoc): void {
   contentDiv.appendChild(autoSaveLabel);
   panel.appendChild(contentDiv);
 
+  // --- Clear Table Catalog section ---
+  const dangerDiv = document.createElement("div");
+  dangerDiv.className = "modal-workspace-settings-danger";
+  const dangerLabel = document.createElement("label");
+  dangerLabel.textContent = "Danger Zone";
+  dangerLabel.className = "modal-workspace-settings-danger-label";
+  dangerDiv.appendChild(dangerLabel);
+  const clearCatalogRow = document.createElement("div");
+  clearCatalogRow.className = "modal-workspace-settings-danger-row";
+  const clearCatalogDesc = document.createElement("span");
+  clearCatalogDesc.className = "modal-workspace-settings-danger-desc";
+  clearCatalogDesc.textContent =
+    "Remove all tables and relationships from the workspace catalog. Diagrams are not affected.";
+  const clearCatalogBtn = document.createElement("button");
+  clearCatalogBtn.type = "button";
+  clearCatalogBtn.className = "modal-workspace-settings-danger-btn";
+  clearCatalogBtn.textContent = "Clear Table Catalog";
+  clearCatalogBtn.onclick = async () => {
+    const count = w.catalogTables.length;
+    if (count === 0) {
+      showToast("Catalog is already empty");
+      return;
+    }
+    if (
+      !confirm(
+        `This will remove all ${count} table(s) and all catalog relationships from the workspace catalog.\n\nExisting diagrams will not be modified, but their catalog links will be broken.\n\nContinue?`
+      )
+    ) {
+      return;
+    }
+    w.catalogTables = [];
+    w.catalogRelationships = [];
+    await saveTableCatalog(w.rootPath, w.catalogTables);
+    await saveCatalogRelationships(w.rootPath, w.catalogRelationships);
+    overlay.remove();
+    bindActiveTab();
+    refreshTabStrip();
+    updateEditorContentVisibility();
+    renderWorkspaceView();
+    appendStatus(`Cleared table catalog (${count} tables removed)`);
+    showToast("Table catalog cleared");
+  };
+  clearCatalogRow.appendChild(clearCatalogDesc);
+  clearCatalogRow.appendChild(clearCatalogBtn);
+  dangerDiv.appendChild(clearCatalogRow);
+  contentDiv.appendChild(dangerDiv);
+  panel.appendChild(contentDiv);
+
   const footerDiv = document.createElement("div");
   footerDiv.className = "modal-workspace-settings-footer";
   const cancelBtn = document.createElement("button");
@@ -5627,6 +6337,15 @@ function setupMenuBar(menuBar: HTMLElement): void {
     openAndImportCSV();
   };
   importFlyout.appendChild(fromCsvItem);
+  const fromDbItem = document.createElement("button");
+  fromDbItem.type = "button";
+  fromDbItem.className = "menu-bar-dropdown-item";
+  fromDbItem.textContent = "From Database";
+  fromDbItem.onclick = () => {
+    hideMenus();
+    openDatabaseConnectionDialog();
+  };
+  importFlyout.appendChild(fromDbItem);
   importWrapper.appendChild(importRow);
   importWrapper.appendChild(importFlyout);
   toolsDropdown.appendChild(importWrapper);

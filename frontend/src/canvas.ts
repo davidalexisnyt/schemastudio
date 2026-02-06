@@ -9,6 +9,7 @@ const TABLE_PADDING_LEFT = 10; // match text x position in app
 const TABLE_PADDING_RIGHT = 10;
 const TABLE_COLUMN_GAP = 12; // gap between name and type columns
 const TABLE_CHAR_WIDTH = 6.5; // approximate px per character at 12px font (field text)
+const PK_GUTTER = 14; // gutter width for the primary key icon column
 
 export type TableSide = "left" | "right" | "top" | "bottom";
 
@@ -16,11 +17,17 @@ export function getTableHeight(table: Table): number {
   return HEADER_HEIGHT + table.fields.length * ROW_HEIGHT;
 }
 
-/** X position where the type column starts in the field table (name column | type column). */
+/** X position where field name text starts (after the PK gutter). */
+export function getFieldNameX(): number {
+  return TABLE_PADDING_LEFT + PK_GUTTER;
+}
+
+/** X position where the type column starts in the field table (gutter + name column | type column). */
 export function getTableFieldColumnStart(table: Table): number {
   const maxNameLen = Math.max(0, ...table.fields.map((f) => f.name.length));
   return (
     TABLE_PADDING_LEFT +
+    PK_GUTTER +
     Math.ceil(maxNameLen * TABLE_CHAR_WIDTH) +
     TABLE_COLUMN_GAP
   );
@@ -33,7 +40,7 @@ export function getTableWidth(table: Table): number {
   const maxTypeLen = Math.max(0, ...table.fields.map((f) => f.type.length));
   const nameColWidth = maxNameLen * TABLE_CHAR_WIDTH;
   const typeColWidth = maxTypeLen * TABLE_CHAR_WIDTH;
-  const fieldsWidth = nameColWidth + TABLE_COLUMN_GAP + typeColWidth;
+  const fieldsWidth = PK_GUTTER + nameColWidth + TABLE_COLUMN_GAP + typeColWidth;
   const contentWidth = Math.max(headerWidth, fieldsWidth);
   return Math.max(
     TABLE_WIDTH,
@@ -292,4 +299,4 @@ export function getRelationshipPathData(
   return p ? [p] : [];
 }
 
-export { TABLE_WIDTH, ROW_HEIGHT, HEADER_HEIGHT };
+export { TABLE_WIDTH, ROW_HEIGHT, HEADER_HEIGHT, PK_GUTTER };

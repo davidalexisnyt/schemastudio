@@ -34,6 +34,19 @@ declare global {
           ExportMermaid(jsonContent: string): Promise<string>;
           ExportPlantUML(jsonContent: string): Promise<string>;
           Version(): Promise<string>;
+          TestDatabaseConnection(configJSON: string): Promise<string>;
+          ListDatabaseSchemas(configJSON: string): Promise<string>;
+          ListDatabaseTables(configJSON: string, schemaName: string): Promise<string>;
+          ImportFromDatabase(configJSON: string, schemaName: string, tablesJSON: string): Promise<string>;
+          StartBigQueryOAuth(configJSON: string): Promise<string>;
+          SaveOAuthClientConfig(clientID: string, clientSecret: string): Promise<void>;
+          SaveConnectionProfile(name: string, configJSON: string): Promise<void>;
+          LoadConnectionProfile(name: string): Promise<string>;
+          ListConnectionProfiles(): Promise<string>;
+          DeleteConnectionProfile(name: string): Promise<void>;
+          SaveProfilePassword(profileName: string, password: string): Promise<void>;
+          LoadProfilePassword(profileName: string): Promise<string>;
+          DeleteProfilePassword(profileName: string): Promise<void>;
         };
       };
     };
@@ -178,4 +191,88 @@ export async function getVersion(): Promise<string> {
   if (!app || !(app as { Version?: () => Promise<string> }).Version)
     return "";
   return (app as { Version: () => Promise<string> }).Version();
+}
+
+// --- Database connectivity bridge functions ---
+
+export async function testDatabaseConnection(configJSON: string): Promise<string> {
+  const app = getApp();
+  if (!app) throw new Error("Backend not available");
+  return app.TestDatabaseConnection(configJSON);
+}
+
+export async function listDatabaseSchemas(configJSON: string): Promise<string> {
+  const app = getApp();
+  if (!app) throw new Error("Backend not available");
+  return app.ListDatabaseSchemas(configJSON);
+}
+
+export async function listDatabaseTables(configJSON: string, schemaName: string): Promise<string> {
+  const app = getApp();
+  if (!app) throw new Error("Backend not available");
+  return app.ListDatabaseTables(configJSON, schemaName);
+}
+
+export async function importFromDatabase(
+  configJSON: string,
+  schemaName: string,
+  tablesJSON: string,
+): Promise<string> {
+  const app = getApp();
+  if (!app) throw new Error("Backend not available");
+  return app.ImportFromDatabase(configJSON, schemaName, tablesJSON);
+}
+
+export async function startBigQueryOAuth(configJSON: string): Promise<string> {
+  const app = getApp();
+  if (!app) throw new Error("Backend not available");
+  return app.StartBigQueryOAuth(configJSON);
+}
+
+export async function saveOAuthClientConfig(clientID: string, clientSecret: string): Promise<void> {
+  const app = getApp();
+  if (!app) throw new Error("Backend not available");
+  return app.SaveOAuthClientConfig(clientID, clientSecret);
+}
+
+export async function saveConnectionProfile(name: string, configJSON: string): Promise<void> {
+  const app = getApp();
+  if (!app) throw new Error("Backend not available");
+  return app.SaveConnectionProfile(name, configJSON);
+}
+
+export async function loadConnectionProfile(name: string): Promise<string> {
+  const app = getApp();
+  if (!app) throw new Error("Backend not available");
+  return app.LoadConnectionProfile(name);
+}
+
+export async function listConnectionProfiles(): Promise<string> {
+  const app = getApp();
+  if (!app) throw new Error("Backend not available");
+  return app.ListConnectionProfiles();
+}
+
+export async function deleteConnectionProfile(name: string): Promise<void> {
+  const app = getApp();
+  if (!app) throw new Error("Backend not available");
+  return app.DeleteConnectionProfile(name);
+}
+
+export async function saveProfilePassword(profileName: string, password: string): Promise<void> {
+  const app = getApp();
+  if (!app) throw new Error("Backend not available");
+  return app.SaveProfilePassword(profileName, password);
+}
+
+export async function loadProfilePassword(profileName: string): Promise<string> {
+  const app = getApp();
+  if (!app) throw new Error("Backend not available");
+  return app.LoadProfilePassword(profileName);
+}
+
+export async function deleteProfilePassword(profileName: string): Promise<void> {
+  const app = getApp();
+  if (!app) throw new Error("Backend not available");
+  return app.DeleteProfilePassword(profileName);
 }

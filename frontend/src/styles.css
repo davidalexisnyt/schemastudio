@@ -834,6 +834,10 @@ body {
   font-size: 12px;
 }
 
+.table-field-pk-icon {
+  color: var(--accent);
+}
+
 .relationship-path {
   fill: none;
   stroke: var(--border);
@@ -1297,6 +1301,52 @@ body {
   color: var(--text);
   font-size: 0.875rem;
   cursor: pointer;
+}
+
+.modal-workspace-settings-danger {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.modal-workspace-settings-danger-label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--danger);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.5rem;
+}
+
+.modal-workspace-settings-danger-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  justify-content: space-between;
+}
+
+.modal-workspace-settings-danger-desc {
+  font-size: 0.8rem;
+  color: var(--muted);
+  flex: 1;
+}
+
+.modal-workspace-settings-danger-btn {
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--danger);
+  font-size: 0.8rem;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.modal-workspace-settings-danger-btn:hover {
+  background: var(--danger);
+  color: var(--bg);
 }
 
 .modal-panel-table-editor {
@@ -2143,4 +2193,210 @@ body {
 
 .status-line-error {
   color: var(--danger);
+}
+
+/* --- Database Connection Dialog --- */
+
+.modal-panel-dbconn {
+  display: flex;
+  flex-direction: column;
+  width: 520px;
+  max-width: 90vw;
+  max-height: 85vh;
+  overflow: hidden;
+}
+
+.modal-dbconn-header {
+  flex-shrink: 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  padding: 1rem 1.25rem;
+  margin: -1rem -1.25rem 0;
+}
+
+.modal-dbconn-header .modal-title {
+  margin: 0;
+}
+
+.modal-dbconn-content {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  padding: 0.5rem 0;
+}
+
+.modal-dbconn-row {
+  margin-bottom: 0.5rem;
+}
+
+.modal-dbconn-row label {
+  display: block;
+  margin-top: 0.25rem;
+  margin-bottom: 0.25rem;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+.modal-dbconn-profile-row {
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-dbconn-profile-row label {
+  display: block;
+  margin-top: 0.25rem;
+  margin-bottom: 0.25rem;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+.modal-dbconn-file-picker {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.modal-dbconn-file-picker .modal-input {
+  flex: 1;
+}
+
+.modal-dbconn-btn {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.modal-dbconn-btn:hover {
+  background: var(--bg);
+}
+
+.modal-dbconn-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.modal-dbconn-btn-primary {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+
+.modal-dbconn-btn-primary:hover {
+  opacity: 0.9;
+}
+
+.modal-dbconn-btn-sm {
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.modal-dbconn-btn-sm:hover {
+  background: var(--bg);
+}
+
+.modal-dbconn-test-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--border);
+}
+
+.modal-dbconn-test-status {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.modal-dbconn-test-ok {
+  color: #a6e3a1;
+}
+
+.modal-dbconn-test-err {
+  color: var(--danger);
+}
+
+.modal-dbconn-selection {
+  border-top: 1px solid var(--border);
+  padding-top: 0.5rem;
+}
+
+.modal-dbconn-table-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.modal-dbconn-table-header label {
+  font-size: 0.875rem;
+  color: var(--muted);
+  margin: 0.5rem 0 0.25rem;
+}
+
+.modal-dbconn-table-list {
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  padding: 0.25rem;
+}
+
+.modal-dbconn-table-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.modal-dbconn-table-item:hover {
+  background: var(--surface);
+}
+
+.modal-dbconn-table-item input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
+.modal-dbconn-oauth-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.modal-dbconn-oauth-status {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.modal-dbconn-footer {
+  flex-shrink: 0;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  padding: 0.75rem 1.25rem;
+  margin: 0.5rem -1.25rem -1rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modal-dbconn-footer-left {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.modal-dbconn-footer-right {
+  display: flex;
+  gap: 0.5rem;
 }

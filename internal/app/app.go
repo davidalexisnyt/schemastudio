@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"schemastudio/internal/dbconn"
 	"schemastudio/internal/importers"
 	"schemastudio/internal/schema"
 	"schemastudio/internal/sqlx"
@@ -196,4 +198,244 @@ func (a *App) ExportPlantUML(jsonContent string) (string, error) {
 		return "", err
 	}
 	return schema.ToPlantUML(d), nil
+}
+
+// --- Database connectivity methods ---
+
+// TestDatabaseConnection validates connectivity to a database and returns a status message.
+func (a *App) TestDatabaseConnection(configJSON string) (string, error) {
+	var cfg dbconn.ConnectionConfig
+	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+		return "", err
+	}
+	inspector, err := dbconn.NewInspector(cfg.Driver)
+	if err != nil {
+		return "", err
+	}
+	if err := inspector.Connect(cfg); err != nil {
+		return "", err
+	}
+	defer inspector.Close()
+	return "Connection successful", nil
+}
+
+// ListDatabaseSchemas returns a JSON array of schema names for the given connection.
+func (a *App) ListDatabaseSchemas(configJSON string) (string, error) {
+	var cfg dbconn.ConnectionConfig
+	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+		return "", err
+	}
+	inspector, err := dbconn.NewInspector(cfg.Driver)
+	if err != nil {
+		return "", err
+	}
+	if err := inspector.Connect(cfg); err != nil {
+		return "", err
+	}
+	defer inspector.Close()
+	schemas, err := inspector.ListSchemas()
+	if err != nil {
+		return "", err
+	}
+	b, err := json.Marshal(schemas)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// ListDatabaseTables returns a JSON array of table names in the given schema.
+func (a *App) ListDatabaseTables(configJSON string, schemaName string) (string, error) {
+	var cfg dbconn.ConnectionConfig
+	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+		return "", err
+	}
+	inspector, err := dbconn.NewInspector(cfg.Driver)
+	if err != nil {
+		return "", err
+	}
+	if err := inspector.Connect(cfg); err != nil {
+		return "", err
+	}
+	defer inspector.Close()
+	tables, err := inspector.ListTables(schemaName)
+	if err != nil {
+		return "", err
+	}
+	b, err := json.Marshal(tables)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// ImportFromDatabase introspects selected tables and returns TableCatalog JSON.
+func (a *App) ImportFromDatabase(configJSON string, schemaName string, tablesJSON string) (string, error) {
+	var cfg dbconn.ConnectionConfig
+	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+		return "", err
+	}
+	var tableNames []string
+	if tablesJSON != "" {
+		if err := json.Unmarshal([]byte(tablesJSON), &tableNames); err != nil {
+			return "", err
+		}
+	}
+	inspector, err := dbconn.NewInspector(cfg.Driver)
+	if err != nil {
+		return "", err
+	}
+	if err := inspector.Connect(cfg); err != nil {
+		return "", err
+	}
+	defer inspector.Close()
+	catalog, err := inspector.InspectSchema(schemaName, tableNames)
+	if err != nil {
+		return "", err
+	}
+	b, err := json.Marshal(catalog)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// StartBigQueryOAuth initiates the OAuth2 user authentication flow for BigQuery.
+// It starts a localhost callback listener, returns the authorization URL for the
+// frontend to open in a Wails window, waits for the callback, exchanges the code
+// for tokens, and caches them.
+func (a *App) StartBigQueryOAuth(configJSON string) (string, error) {
+	var cfg dbconn.ConnectionConfig
+	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+		return "", err
+	}
+
+	// Load or use the OAuth client config
+	clientCfg, err := dbconn.LoadOAuthClientConfig()
+	if err != nil {
+		return "", fmt.Errorf("no OAuth client configuration found; please configure OAuth client ID first")
+	}
+
+	authURL, waitForToken, cleanup, err := dbconn.StartOAuthFlow(clientCfg.ClientID, clientCfg.ClientSecret)
+	if err != nil {
+		return "", err
+	}
+
+	// Open the auth URL in the default browser or a new window.
+	// The frontend will handle opening this URL in a Wails webview.
+	// For now, return the URL and let the frontend decide how to open it.
+	// We need to wait for the token in a goroutine since this is called synchronously.
+
+	// Actually, we return the authURL first so the frontend can open it,
+	// then we need a second call to get the token. Let's combine it:
+	// Start a goroutine that waits for the token.
+	go func() {
+		defer cleanup()
+		token, err := waitForToken()
+		if err != nil {
+			return
+		}
+		// Cache the token
+		dbconn.SaveToken(cfg.Project, token)
+	}()
+
+	return authURL, nil
+}
+
+// SaveOAuthClientConfig saves the OAuth client ID and secret for BigQuery user auth.
+func (a *App) SaveOAuthClientConfig(clientID string, clientSecret string) error {
+	return dbconn.SaveOAuthClientConfig(dbconn.OAuthClientConfig{
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
+	})
+}
+
+// --- Connection Profiles ---
+
+// SaveConnectionProfile saves a connection profile (without password) to disk.
+func (a *App) SaveConnectionProfile(name string, configJSON string) error {
+	dir, err := connectionProfilesDir()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dir, name+".json")
+	return os.WriteFile(path, []byte(configJSON), 0600)
+}
+
+// LoadConnectionProfile loads a saved connection profile.
+func (a *App) LoadConnectionProfile(name string) (string, error) {
+	dir, err := connectionProfilesDir()
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, name+".json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// ListConnectionProfiles returns a JSON array of saved connection profile names.
+func (a *App) ListConnectionProfiles() (string, error) {
+	dir, err := connectionProfilesDir()
+	if err != nil {
+		return "[]", nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "[]", nil
+	}
+	var names []string
+	for _, e := range entries {
+		if !e.IsDir() && filepath.Ext(e.Name()) == ".json" {
+			name := e.Name()
+			names = append(names, name[:len(name)-5])
+		}
+	}
+	sort.Strings(names)
+	b, err := json.Marshal(names)
+	if err != nil {
+		return "[]", nil
+	}
+	return string(b), nil
+}
+
+// DeleteConnectionProfile deletes a saved connection profile.
+func (a *App) DeleteConnectionProfile(name string) error {
+	dir, err := connectionProfilesDir()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dir, name+".json")
+	return os.Remove(path)
+}
+
+// --- Keyring (OS credential manager) for passwords ---
+
+// SaveProfilePassword stores a connection profile's password in the OS credential manager.
+func (a *App) SaveProfilePassword(profileName string, password string) error {
+	return dbconn.SavePassword(profileName, password)
+}
+
+// LoadProfilePassword retrieves a connection profile's password from the OS credential manager.
+func (a *App) LoadProfilePassword(profileName string) (string, error) {
+	return dbconn.LoadPassword(profileName)
+}
+
+// DeleteProfilePassword removes a connection profile's password from the OS credential manager.
+func (a *App) DeleteProfilePassword(profileName string) error {
+	return dbconn.DeletePassword(profileName)
+}
+
+func connectionProfilesDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(home, ".schemastudio", "connections")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", err
+	}
+	return dir, nil
 }
