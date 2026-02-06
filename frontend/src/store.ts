@@ -2,6 +2,7 @@ import type {
   Diagram,
   Table,
   Field,
+  FieldTypeOverride,
   Relationship,
   Note,
   TextBlock,
@@ -199,6 +200,10 @@ export class Store {
       type: string;
       nullable?: boolean;
       primaryKey?: boolean;
+      length?: number;
+      precision?: number;
+      scale?: number;
+      typeOverrides?: Record<string, FieldTypeOverride>;
     }[]
   ): void {
     this.pushUndo();
@@ -208,13 +213,17 @@ export class Store {
     const existingIds = new Set(t.fields.map((f) => f.id));
     const newFields: Field[] = [];
     for (const row of fields) {
-      const typeNorm = row.type.trim().toLowerCase() || "text";
+      const typeNorm = row.type.trim().toLowerCase() || "string";
       if (row.id && existingIds.has(row.id)) {
         const f = t.fields.find((x) => x.id === row.id)!;
         f.name = row.name;
         f.type = typeNorm;
         f.nullable = row.nullable ?? false;
         f.primaryKey = row.primaryKey ?? false;
+        f.length = row.length;
+        f.precision = row.precision;
+        f.scale = row.scale;
+        f.typeOverrides = row.typeOverrides;
         newFields.push(f);
       } else {
         newFields.push({
@@ -223,6 +232,10 @@ export class Store {
           type: typeNorm,
           nullable: row.nullable ?? false,
           primaryKey: row.primaryKey ?? false,
+          length: row.length,
+          precision: row.precision,
+          scale: row.scale,
+          typeOverrides: row.typeOverrides,
         });
       }
     }

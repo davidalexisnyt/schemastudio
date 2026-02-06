@@ -22,8 +22,13 @@ type ConnectionConfig struct {
 	Project         string `json:"project,omitempty"`
 	Dataset         string `json:"dataset,omitempty"`
 	CredentialsFile string `json:"credentialsFile,omitempty"`
-	// BigQuery auth mode: "service_account" or "user_oauth"
+	// BigQuery auth mode: "service_account", "user_credentials", or "adc" (Application Default Credentials)
 	BigQueryAuthMode string `json:"bigqueryAuthMode,omitempty"`
+
+	// User credentials OAuth fields (for bigqueryAuthMode == "user_credentials")
+	OAuthClientID     string `json:"oauthClientId,omitempty"`
+	OAuthClientSecret string `json:"oauthClientSecret,omitempty"`
+	OAuthRefreshToken string `json:"oauthRefreshToken,omitempty"`
 }
 
 // SchemaInspector is the common interface for database schema introspection.

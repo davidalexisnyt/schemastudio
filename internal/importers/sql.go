@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"schemastudio/internal/schema"
+	"schemastudio/internal/sqlx"
 )
 
 // ParseSQL parses DDL (PostgreSQL-style CREATE TABLE with optional PRIMARY KEY/FOREIGN KEY)
@@ -92,16 +93,37 @@ func ParseSQL(sql string) (schema.TableCatalog, error) {
 				}
 				continue
 			}
-			// Column: name type [NOT NULL] ...
+			// Column: name type[(args)] [NOT NULL] ...
 			parts := strings.Fields(line)
 			if len(parts) < 2 {
 				continue
 			}
 			colName := strings.Trim(parts[0], `"`)
-			colType := parts[1]
-			fID := idGen.field()
-			t.Fields = append(t.Fields, schema.Field{ID: fID, Name: colName, Type: strings.ToLower(colType)})
-			fieldByName[colName] = fID
+			// Reconstruct the raw type, which may span parts due to spaces (e.g. "double precision", "character varying(255)")
+			rawType := extractRawType(line[len(parts[0]):])
+			genericType, length, precision, scale := sqlx.NormalizeType(rawType)
+			// Detect PK and nullable from the rest of the line
+			upperLine := strings.ToUpper(line)
+			isPK := strings.Contains(upperLine, "PRIMARY KEY")
+			isNullable := !strings.Contains(upperLine, "NOT NULL") && !isPK
+			f := schema.Field{
+				ID:         idGen.field(),
+				Name:       colName,
+				Type:       genericType,
+				Nullable:   isNullable,
+				PrimaryKey: isPK,
+				Length:     length,
+				Precision:  precision,
+				Scale:      scale,
+			}
+			// Store original raw type as a postgres override (DDL import is Postgres-style)
+			if rawTypeLower := strings.ToLower(strings.TrimSpace(rawType)); rawTypeLower != genericType {
+				f.TypeOverrides = map[string]schema.FieldTypeOverride{
+					"postgres": {Type: rawTypeLower},
+				}
+			}
+			t.Fields = append(t.Fields, f)
+			fieldByName[colName] = f.ID
 		}
 		catalog.Tables = append(catalog.Tables, t)
 		tableByName[tblName] = len(catalog.Tables) - 1
@@ -149,6 +171,67 @@ func splitBody(body string) []string {
 		lines = append(lines, current.String())
 	}
 	return lines
+}
+
+// extractRawType extracts the SQL type from the remainder of a column definition line
+// (after the column name has been removed). It handles multi-word types like "double precision"
+// and parenthetical arguments like "varchar(255)" or "numeric(10,2)".
+func extractRawType(rest string) string {
+	rest = strings.TrimSpace(rest)
+	if rest == "" {
+		return ""
+	}
+
+	// Known SQL keywords that signal end of type
+	stopWords := map[string]bool{
+		"NOT": true, "NULL": true, "DEFAULT": true, "PRIMARY": true,
+		"KEY": true, "REFERENCES": true, "UNIQUE": true, "CHECK": true,
+		"CONSTRAINT": true, "AUTO_INCREMENT": true, "GENERATED": true,
+		"COLLATE": true, "COMMENT": true, "ON": true,
+	}
+
+	var result strings.Builder
+	i := 0
+	for i < len(rest) {
+		ch := rest[i]
+		if ch == '(' {
+			// Consume parenthetical block
+			depth := 1
+			result.WriteByte(ch)
+			i++
+			for i < len(rest) && depth > 0 {
+				if rest[i] == '(' {
+					depth++
+				} else if rest[i] == ')' {
+					depth--
+				}
+				result.WriteByte(rest[i])
+				i++
+			}
+		} else if ch == ' ' || ch == '\t' {
+			// Peek at next word; if it's a stop-word, we're done
+			remaining := strings.TrimSpace(rest[i:])
+			nextWord := strings.Fields(remaining)
+			if len(nextWord) == 0 {
+				break
+			}
+			upper := strings.ToUpper(nextWord[0])
+			if stopWords[upper] {
+				break
+			}
+			// Could be multi-word type like "double precision", "character varying"
+			result.WriteByte(' ')
+			i++
+			// skip extra whitespace
+			for i < len(rest) && (rest[i] == ' ' || rest[i] == '\t') {
+				i++
+			}
+		} else {
+			result.WriteByte(ch)
+			i++
+		}
+	}
+	return strings.TrimSpace(result.String())
 }
 
 type idGen struct {

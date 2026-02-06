@@ -70,6 +70,10 @@ export function LoadConnectionProfile(arg1) {
   return window['go']['app']['App']['LoadConnectionProfile'](arg1);
 }
 
+export function LoadOAuthClientConfig() {
+  return window['go']['app']['App']['LoadOAuthClientConfig']();
+}
+
 export function LoadProfilePassword(arg1) {
   return window['go']['app']['App']['LoadProfilePassword'](arg1);
 }
@@ -108,10 +112,6 @@ export function SaveOAuthClientConfig(arg1, arg2) {
 
 export function SaveProfilePassword(arg1, arg2) {
   return window['go']['app']['App']['SaveProfilePassword'](arg1, arg2);
-}
-
-export function StartBigQueryOAuth(arg1) {
-  return window['go']['app']['App']['StartBigQueryOAuth'](arg1);
 }
 
 export function TestDatabaseConnection(arg1) {

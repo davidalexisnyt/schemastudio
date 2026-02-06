@@ -7,10 +7,13 @@ import (
 	"strings"
 
 	"cloud.google.com/go/bigquery"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 
 	"schemastudio/internal/schema"
+	"schemastudio/internal/sqlx"
 )
 
 // BigQueryInspector implements SchemaInspector for Google BigQuery.
@@ -31,20 +34,49 @@ func (b *BigQueryInspector) Connect(cfg ConnectionConfig) error {
 			return fmt.Errorf("bigquery service account: credentials file is required")
 		}
 		opts = append(opts, option.WithCredentialsFile(cfg.CredentialsFile))
-	case "user_oauth":
-		// When using user OAuth, the token is expected to have been obtained
-		// and cached already via the StartBigQueryOAuth flow. We check for a
-		// cached token source and use it.
-		ts, err := loadCachedTokenSource(cfg.Project)
-		if err != nil {
-			return fmt.Errorf("bigquery user oauth: no cached credentials found, please sign in first: %w", err)
+
+	case "user_credentials":
+		// User provides their own OAuth Client ID, Client Secret, and Refresh Token.
+		// This creates a token source that uses the refresh token to obtain access tokens.
+		if cfg.OAuthClientID == "" || cfg.OAuthClientSecret == "" || cfg.OAuthRefreshToken == "" {
+			return fmt.Errorf("bigquery user credentials: client ID, client secret, and refresh token are all required")
 		}
+		oauthCfg := &oauth2.Config{
+			ClientID:     cfg.OAuthClientID,
+			ClientSecret: cfg.OAuthClientSecret,
+			Endpoint:     google.Endpoint,
+			Scopes:       bigqueryScopes,
+		}
+		token := &oauth2.Token{
+			RefreshToken: cfg.OAuthRefreshToken,
+		}
+		ts := oauthCfg.TokenSource(ctx, token)
 		opts = append(opts, option.WithTokenSource(ts))
+
+	case "adc":
+		// Application Default Credentials -- the BigQuery client library picks
+		// these up automatically (e.g. from `gcloud auth application-default login`).
+		// No extra options needed.
+
 	default:
-		// Default: try Application Default Credentials (no extra options needed)
-		if cfg.CredentialsFile != "" {
+		// Backwards compat: treat "user_oauth" the same as "user_credentials" if
+		// refresh token is provided, otherwise fall back to ADC.
+		if cfg.OAuthRefreshToken != "" && cfg.OAuthClientID != "" && cfg.OAuthClientSecret != "" {
+			oauthCfg := &oauth2.Config{
+				ClientID:     cfg.OAuthClientID,
+				ClientSecret: cfg.OAuthClientSecret,
+				Endpoint:     google.Endpoint,
+				Scopes:       bigqueryScopes,
+			}
+			token := &oauth2.Token{
+				RefreshToken: cfg.OAuthRefreshToken,
+			}
+			ts := oauthCfg.TokenSource(ctx, token)
+			opts = append(opts, option.WithTokenSource(ts))
+		} else if cfg.CredentialsFile != "" {
 			opts = append(opts, option.WithCredentialsFile(cfg.CredentialsFile))
 		}
+		// else: ADC
 	}
 
 	project := cfg.Project
@@ -148,12 +180,28 @@ func (b *BigQueryInspector) InspectSchema(schemaName string, tableNames []string
 		var fields []schema.Field
 		for _, fs := range md.Schema {
 			fID := gen.field()
-			fields = append(fields, schema.Field{
-				ID:       fID,
-				Name:     fs.Name,
-				Type:     strings.ToLower(string(fs.Type)),
-				Nullable: !fs.Required,
-			})
+			rawType := string(fs.Type)
+			genericType, normLen, normPrec, normScale := sqlx.NormalizeType(rawType)
+
+			f := schema.Field{
+				ID:        fID,
+				Name:      fs.Name,
+				Type:      genericType,
+				Nullable:  !fs.Required,
+				Length:    normLen,
+				Precision: normPrec,
+				Scale:     normScale,
+			}
+
+			// Store the original BigQuery type as a dialect-specific override
+			rawLower := strings.ToLower(strings.TrimSpace(rawType))
+			if rawLower != genericType {
+				f.TypeOverrides = map[string]schema.FieldTypeOverride{
+					"bigquery": {Type: rawLower},
+				}
+			}
+
+			fields = append(fields, f)
 		}
 
 		row, col := i/cols, i%cols

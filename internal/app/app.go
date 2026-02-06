@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -300,54 +299,25 @@ func (a *App) ImportFromDatabase(configJSON string, schemaName string, tablesJSO
 	return string(b), nil
 }
 
-// StartBigQueryOAuth initiates the OAuth2 user authentication flow for BigQuery.
-// It starts a localhost callback listener, returns the authorization URL for the
-// frontend to open in a Wails window, waits for the callback, exchanges the code
-// for tokens, and caches them.
-func (a *App) StartBigQueryOAuth(configJSON string) (string, error) {
-	var cfg dbconn.ConnectionConfig
-	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
-		return "", err
-	}
-
-	// Load or use the OAuth client config
-	clientCfg, err := dbconn.LoadOAuthClientConfig()
-	if err != nil {
-		return "", fmt.Errorf("no OAuth client configuration found; please configure OAuth client ID first")
-	}
-
-	authURL, waitForToken, cleanup, err := dbconn.StartOAuthFlow(clientCfg.ClientID, clientCfg.ClientSecret)
-	if err != nil {
-		return "", err
-	}
-
-	// Open the auth URL in the default browser or a new window.
-	// The frontend will handle opening this URL in a Wails webview.
-	// For now, return the URL and let the frontend decide how to open it.
-	// We need to wait for the token in a goroutine since this is called synchronously.
-
-	// Actually, we return the authURL first so the frontend can open it,
-	// then we need a second call to get the token. Let's combine it:
-	// Start a goroutine that waits for the token.
-	go func() {
-		defer cleanup()
-		token, err := waitForToken()
-		if err != nil {
-			return
-		}
-		// Cache the token
-		dbconn.SaveToken(cfg.Project, token)
-	}()
-
-	return authURL, nil
-}
-
 // SaveOAuthClientConfig saves the OAuth client ID and secret for BigQuery user auth.
 func (a *App) SaveOAuthClientConfig(clientID string, clientSecret string) error {
 	return dbconn.SaveOAuthClientConfig(dbconn.OAuthClientConfig{
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
 	})
+}
+
+// LoadOAuthClientConfig returns the saved OAuth client ID and secret as JSON.
+func (a *App) LoadOAuthClientConfig() (string, error) {
+	cfg, err := dbconn.LoadOAuthClientConfig()
+	if err != nil {
+		return "{}", nil // Return empty JSON if no config exists
+	}
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 // --- Connection Profiles ---

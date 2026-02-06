@@ -4,12 +4,22 @@ export interface Viewport {
   panY: number;
 }
 
+/** Per-database type override for a field. */
+export interface FieldTypeOverride {
+  type: string; // e.g. "varchar(15)", "nvarchar(max)", "STRING"
+}
+
 export interface Field {
   id: string;
   name: string;
-  type: string;
+  type: string; // generic model type from FIELD_TYPES
   nullable?: boolean;
   primaryKey?: boolean;
+  length?: number; // for string types (e.g. 15 -> varchar(15) on export)
+  precision?: number; // for numeric types (e.g. 10)
+  scale?: number; // for numeric types (e.g. 2)
+  /** Per-database type overrides. Key = dialect ("postgres", "mysql", "mssql", "bigquery"). */
+  typeOverrides?: Record<string, FieldTypeOverride>;
 }
 
 export interface Table {
@@ -101,15 +111,18 @@ export type Selection =
   | null;
 
 export const FIELD_TYPES = [
-  "text",
   "string",
-  "int",
-  "bigint",
+  "integer",
+  "float",
   "numeric",
-  "uuid",
-  "timestamp",
-  "date",
   "boolean",
+  "date",
+  "time",
+  "timestamp",
+  "timestamptz",
+  "uuid",
+  "json",
+  "bytes",
   "other",
 ] as const;
 

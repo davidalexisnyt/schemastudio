@@ -30,13 +30,22 @@ type Table struct {
 	Fields []Field `json:"fields"`
 }
 
+// FieldTypeOverride holds a per-database type override for a field.
+type FieldTypeOverride struct {
+	Type string `json:"type"`
+}
+
 // Field is a column in a table.
 type Field struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	Type       string `json:"type"`
-	Nullable   bool   `json:"nullable,omitempty"`
-	PrimaryKey bool   `json:"primaryKey,omitempty"`
+	ID            string                       `json:"id"`
+	Name          string                       `json:"name"`
+	Type          string                       `json:"type"`
+	Nullable      bool                         `json:"nullable,omitempty"`
+	PrimaryKey    bool                         `json:"primaryKey,omitempty"`
+	Length        *int                         `json:"length,omitempty"`
+	Precision     *int                         `json:"precision,omitempty"`
+	Scale         *int                         `json:"scale,omitempty"`
+	TypeOverrides map[string]FieldTypeOverride `json:"typeOverrides,omitempty"`
 }
 
 // Relationship links source field(s) to target field(s).

@@ -102,7 +102,7 @@ func (m *MySQLInspector) InspectSchema(schemaName string, tableNames []string) (
 	if err != nil {
 		return schema.TableCatalog{}, err
 	}
-	return buildCatalog(columns, pks, fks, fmt.Sprintf("%s (MySQL)", schemaName)), nil
+	return buildCatalog(columns, pks, fks, fmt.Sprintf("%s (MySQL)", schemaName), "mysql"), nil
 }
 
 // queryForeignKeys retrieves FK relationships for MySQL using REFERENCED_TABLE_NAME/COLUMN_NAME.

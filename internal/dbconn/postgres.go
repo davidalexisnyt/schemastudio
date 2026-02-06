@@ -82,7 +82,7 @@ func (p *PostgresInspector) InspectSchema(schemaName string, tableNames []string
 	if err != nil {
 		return schema.TableCatalog{}, err
 	}
-	return buildCatalog(columns, pks, fks, fmt.Sprintf("%s (PostgreSQL)", schemaName)), nil
+	return buildCatalog(columns, pks, fks, fmt.Sprintf("%s (PostgreSQL)", schemaName), "postgres"), nil
 }
 
 // queryForeignKeys retrieves FK relationships for PostgreSQL using constraint_column_usage.

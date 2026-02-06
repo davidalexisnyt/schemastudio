@@ -35,6 +35,8 @@ export function Load(arg1:string):Promise<string>;
 
 export function LoadConnectionProfile(arg1:string):Promise<string>;
 
+export function LoadOAuthClientConfig():Promise<string>;
+
 export function LoadProfilePassword(arg1:string):Promise<string>;
 
 export function OpenDirectoryDialog(arg1:string):Promise<string>;
@@ -54,8 +56,6 @@ export function SaveFileDialog(arg1:string,arg2:string,arg3:string,arg4:string):
 export function SaveOAuthClientConfig(arg1:string,arg2:string):Promise<void>;
 
 export function SaveProfilePassword(arg1:string,arg2:string):Promise<void>;
-
-export function StartBigQueryOAuth(arg1:string):Promise<string>;
 
 export function TestDatabaseConnection(arg1:string):Promise<string>;
 

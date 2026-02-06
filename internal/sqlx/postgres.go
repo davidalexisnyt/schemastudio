@@ -37,15 +37,22 @@ func ExportPostgresWithSchema(d schema.Diagram, schemaName string) (string, erro
 			b.WriteString("  ")
 			b.WriteString(quoteIdent(f.Name))
 			b.WriteString(" ")
-			b.WriteString(pgType(f.Type))
-			b.WriteString(" not null")
-			if strings.EqualFold(f.Name, "id") {
+			b.WriteString(DefaultExportType("postgres", f.Type, f.Length, f.Precision, f.Scale, f.TypeOverrides))
+			if !f.Nullable {
+				b.WriteString(" not null")
+			}
+			if f.PrimaryKey {
 				pk = append(pk, f.Name)
 			}
 		}
 		if len(pk) > 0 {
 			b.WriteString(",\n  primary key (")
-			b.WriteString(quoteIdent(pk[0]))
+			for i, name := range pk {
+				if i > 0 {
+					b.WriteString(", ")
+				}
+				b.WriteString(quoteIdent(name))
+			}
 			b.WriteString(")")
 		}
 		for _, r := range d.Relationships {
@@ -114,35 +121,3 @@ func qualifiedTableName(schemaName, tableName string) string {
 	return quoteIdent(schemaName) + "." + q
 }
 
-func pgType(t string) string {
-	t = strings.ToUpper(strings.TrimSpace(t))
-	switch t {
-	case "INT", "INTEGER", "INT4":
-		return "integer"
-	case "BIGINT", "INT8":
-		return "bigint"
-	case "SMALLINT", "INT2":
-		return "smallint"
-	case "VARCHAR", "STRING", "TEXT":
-		return "text"
-	case "NUMERIC", "DECIMAL":
-		return "numeric"
-	case "FLOAT", "REAL":
-		return "real"
-	case "DOUBLE":
-		return "double precision"
-	case "BOOL", "BOOLEAN":
-		return "boolean"
-	case "DATE":
-		return "date"
-	case "TIMESTAMP", "DATETIME":
-		return "timestamp"
-	case "UUID":
-		return "uuid"
-	default:
-		if t != "" {
-			return strings.ToLower(t)
-		}
-		return "text"
-	}
-}

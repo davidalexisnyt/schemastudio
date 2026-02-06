@@ -9,6 +9,7 @@ const TABLE_PADDING_LEFT = 10; // match text x position in app
 const TABLE_PADDING_RIGHT = 10;
 const TABLE_COLUMN_GAP = 12; // gap between name and type columns
 const TABLE_CHAR_WIDTH = 6.5; // approximate px per character at 12px font (field text)
+const TABLE_HEADER_CHAR_WIDTH = 8; // approximate px per character at 14px bold font (header text)
 const PK_GUTTER = 14; // gutter width for the primary key icon column
 
 export type TableSide = "left" | "right" | "top" | "bottom";
@@ -35,7 +36,7 @@ export function getTableFieldColumnStart(table: Table): number {
 
 /** Table width: at least TABLE_WIDTH, or wider if table/field names need more space. */
 export function getTableWidth(table: Table): number {
-  const headerWidth = table.name.length * TABLE_CHAR_WIDTH;
+  const headerWidth = table.name.length * TABLE_HEADER_CHAR_WIDTH;
   const maxNameLen = Math.max(0, ...table.fields.map((f) => f.name.length));
   const maxTypeLen = Math.max(0, ...table.fields.map((f) => f.type.length));
   const nameColWidth = maxNameLen * TABLE_CHAR_WIDTH;

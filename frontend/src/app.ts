@@ -2,6 +2,7 @@ import type {
   Diagram,
   Table,
   Field,
+  FieldTypeOverride,
   Relationship,
   Selection,
   RecentEntry,
@@ -1524,14 +1525,179 @@ const EXPORT_CANVAS_STYLES = `
   .relationship-path.selected { stroke: #1e66f5 !important; }
   .relationship-arrowhead { fill: #bcc0cc !important; stroke: none !important; }
   .relationship-arrowhead.selected { fill: #1e66f5 !important; }
+  .canvas-note-rect { fill: #fef9c3 !important; stroke: #d4c878 !important; stroke-width: 1 !important; }
+  .canvas-note-resize-handle { display: none !important; }
+  .export-note-text { fill: #1c1917 !important; font-family: system-ui, -apple-system, sans-serif !important; font-size: 12px !important; }
+  .canvas-text-block-border { display: none !important; }
+  .canvas-text-block-handles { display: none !important; }
+  .canvas-text-block-svg-text { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important; }
+  .canvas-text-block-svg-text text { fill: #1c1917 !important; }
+  .export-text-block-text { fill: #1c1917 !important; font-family: system-ui, -apple-system, sans-serif !important; }
 `;
+
+/**
+ * Simple word-wrap: splits text into lines that fit within `maxWidth` at ~charWidthPx per character.
+ */
+function wrapText(text: string, maxWidth: number, charWidthPx: number): string[] {
+  const maxChars = Math.max(1, Math.floor(maxWidth / charWidthPx));
+  const result: string[] = [];
+  for (const paragraph of text.split("\n")) {
+    if (paragraph.length === 0) {
+      result.push("");
+      continue;
+    }
+    const words = paragraph.split(/\s+/);
+    let line = "";
+    for (const word of words) {
+      if (line.length === 0) {
+        line = word;
+      } else if (line.length + 1 + word.length <= maxChars) {
+        line += " " + word;
+      } else {
+        result.push(line);
+        line = word;
+      }
+    }
+    if (line.length > 0) result.push(line);
+  }
+  return result;
+}
+
+/**
+ * Replace foreignObject elements in cloned SVG with pure SVG text elements
+ * so that PNG and SVG exports render correctly.
+ */
+function prepareCloneForExport(clone: SVGElement): void {
+  // ── Notes: replace foreignObject with SVG <text> ──
+  clone.querySelectorAll<SVGGElement>(".canvas-note").forEach((noteG) => {
+    const rect = noteG.querySelector(".canvas-note-rect");
+    const w = rect ? parseFloat(rect.getAttribute("width") || "200") : 200;
+    // Remove the foreignObject
+    const fo = noteG.querySelector("foreignObject");
+    const text = fo?.querySelector(".canvas-note-text")?.textContent ?? "";
+    if (fo) fo.remove();
+    // Remove resize handle
+    noteG.querySelector(".canvas-note-resize-handle")?.remove();
+    // Create SVG text with word wrapping
+    if (text && text !== "Double-click to edit") {
+      const padding = 10;
+      const fontSize = 12;
+      const lineHeight = 1.4;
+      const charWidth = 6.5;
+      const lines = wrapText(text, w - 2 * padding, charWidth);
+      const textEl = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      textEl.setAttribute("class", "export-note-text");
+      textEl.setAttribute("x", String(padding));
+      textEl.setAttribute("font-size", String(fontSize));
+      let y = padding + fontSize; // first baseline
+      for (const line of lines) {
+        const tspan = document.createElementNS("http://www.w3.org/2000/svg", "tspan");
+        tspan.setAttribute("x", String(padding));
+        tspan.setAttribute("y", String(y));
+        tspan.textContent = line;
+        textEl.appendChild(tspan);
+        y += fontSize * lineHeight;
+      }
+      noteG.appendChild(textEl);
+    }
+  });
+
+  // ── Text blocks: replace foreignObject with SVG text (for non-markdown blocks) ──
+  clone.querySelectorAll<SVGGElement>(".canvas-text-block").forEach((blockG) => {
+    // Already has SVG text (markdown)? Keep it, just clean up interactive elements.
+    const hasSvgText = blockG.querySelector(".canvas-text-block-svg-text");
+    if (hasSvgText) {
+      // Just remove interactive UI elements
+      blockG.querySelector(".canvas-text-block-border")?.remove();
+      blockG.querySelector(".canvas-text-block-handles")?.remove();
+      // Remove foreignObject placeholders if any
+      blockG.querySelectorAll("foreignObject").forEach((fo) => fo.remove());
+      return;
+    }
+
+    // Non-markdown text block: replace foreignObject with SVG text
+    const fo = blockG.querySelector("foreignObject");
+    const inner = fo?.querySelector(".canvas-text-block-inner");
+    const text = inner?.textContent ?? "";
+    const foWidth = fo ? parseFloat(fo.getAttribute("width") || "280") : 280;
+    const fontSizeAttr = inner?.getAttribute("style") ?? "";
+    const fsMatch = fontSizeAttr.match(/font-size:\s*(\d+)/);
+    const fontSize = fsMatch ? parseInt(fsMatch[1], 10) : 14;
+    if (fo) fo.remove();
+
+    // Remove interactive UI elements
+    blockG.querySelector(".canvas-text-block-border")?.remove();
+    blockG.querySelector(".canvas-text-block-handles")?.remove();
+
+    if (text && text !== "Double-click to edit") {
+      const charWidth = fontSize * 0.52;
+      const lineHeight = 1.4;
+      const lines = wrapText(text, foWidth, charWidth);
+      const textEl = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      textEl.setAttribute("class", "export-text-block-text");
+      textEl.setAttribute("font-size", String(fontSize));
+      let y = fontSize; // first baseline
+      for (const line of lines) {
+        const tspan = document.createElementNS("http://www.w3.org/2000/svg", "tspan");
+        tspan.setAttribute("x", "0");
+        tspan.setAttribute("y", String(y));
+        tspan.textContent = line;
+        textEl.appendChild(tspan);
+        y += fontSize * lineHeight;
+      }
+      blockG.appendChild(textEl);
+    }
+  });
+}
+
+/**
+ * Compute the bounding box of the entire diagram including tables, notes, and text blocks.
+ */
+function computeExportBounds(d: Diagram): { minX: number; minY: number; maxX: number; maxY: number } {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  for (const t of d.tables) {
+    const w = getTableWidth(t);
+    const h = HEADER_HEIGHT + t.fields.length * ROW_HEIGHT;
+    minX = Math.min(minX, t.x);
+    minY = Math.min(minY, t.y);
+    maxX = Math.max(maxX, t.x + w);
+    maxY = Math.max(maxY, t.y + h);
+  }
+
+  for (const note of d.notes ?? []) {
+    const w = note.width ?? NOTE_DEFAULT_WIDTH;
+    const h = note.height ?? NOTE_DEFAULT_HEIGHT;
+    minX = Math.min(minX, note.x);
+    minY = Math.min(minY, note.y);
+    maxX = Math.max(maxX, note.x + w);
+    maxY = Math.max(maxY, note.y + h);
+  }
+
+  for (const block of d.textBlocks ?? []) {
+    const constrainW = block.width;
+    const measured = measureTextBlockContent(block, constrainW);
+    const w = Math.max(MIN_TEXT_BLOCK_WIDTH, block.width ?? measured.width);
+    const h = block.height ?? measured.height + TEXT_BLOCK_PADDING;
+    minX = Math.min(minX, block.x);
+    minY = Math.min(minY, block.y);
+    maxX = Math.max(maxX, block.x + w);
+    maxY = Math.max(maxY, block.y + h);
+  }
+
+  return { minX, minY, maxX, maxY };
+}
 
 async function exportPNG(): Promise<void> {
   const svgEl = container.querySelector(".canvas-svg") as SVGElement;
   if (!svgEl) return;
   const d = store.getDiagram();
-  if (d.tables.length === 0) {
-    showToast("No tables to export");
+  const hasContent = d.tables.length > 0 || (d.notes ?? []).length > 0 || (d.textBlocks ?? []).length > 0;
+  if (!hasContent) {
+    showToast("Nothing to export");
     return;
   }
   let savePath: string | null = null;
@@ -1544,23 +1710,13 @@ async function exportPNG(): Promise<void> {
     );
     if (!savePath) return;
   }
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (const t of d.tables) {
-    const w = getTableWidth(t);
-    const h = HEADER_HEIGHT + t.fields.length * ROW_HEIGHT;
-    minX = Math.min(minX, t.x);
-    minY = Math.min(minY, t.y);
-    maxX = Math.max(maxX, t.x + w);
-    maxY = Math.max(maxY, t.y + h);
-  }
+  const { minX, minY, maxX, maxY } = computeExportBounds(d);
   const pad = PNG_EXPORT_PADDING;
   const width = maxX - minX + 2 * pad;
   const height = maxY - minY + 2 * pad;
 
   const clone = svgEl.cloneNode(true) as SVGElement;
+  prepareCloneForExport(clone);
   const style = document.createElementNS("http://www.w3.org/2000/svg", "style");
   style.textContent = EXPORT_CANVAS_STYLES;
   clone.insertBefore(style, clone.firstChild);
@@ -1604,10 +1760,35 @@ async function exportSVG(): Promise<void> {
   const svgEl = container.querySelector(".canvas-svg") as SVGElement;
   if (!svgEl) return;
   const d = store.getDiagram();
-  if (d.tables.length === 0) {
-    showToast("No tables to export");
+  const hasContent = d.tables.length > 0 || (d.notes ?? []).length > 0 || (d.textBlocks ?? []).length > 0;
+  if (!hasContent) {
+    showToast("Nothing to export");
     return;
   }
+  const { minX, minY, maxX, maxY } = computeExportBounds(d);
+  const pad = SVG_EXPORT_PADDING;
+  const width = maxX - minX + 2 * pad;
+  const height = maxY - minY + 2 * pad;
+
+  const clone = svgEl.cloneNode(true) as SVGElement;
+  prepareCloneForExport(clone);
+  const style = document.createElementNS(
+    "http://www.w3.org/2000/svg",
+    "style"
+  );
+  style.textContent = EXPORT_CANVAS_STYLES;
+  clone.insertBefore(style, clone.firstChild);
+  const group = clone.querySelector("g") as SVGGElement;
+  if (group) {
+    group.setAttribute(
+      "transform",
+      `translate(${pad - minX}, ${pad - minY})`
+    );
+  }
+  clone.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  clone.setAttribute("width", String(width));
+  clone.setAttribute("height", String(height));
+
   if (bridge.isBackendAvailable()) {
     const path = await bridge.saveFileDialog(
       "Export SVG",
@@ -1616,78 +1797,10 @@ async function exportSVG(): Promise<void> {
       "*.svg"
     );
     if (!path) return;
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    for (const t of d.tables) {
-      const w = getTableWidth(t);
-      const h = HEADER_HEIGHT + t.fields.length * ROW_HEIGHT;
-      minX = Math.min(minX, t.x);
-      minY = Math.min(minY, t.y);
-      maxX = Math.max(maxX, t.x + w);
-      maxY = Math.max(maxY, t.y + h);
-    }
-    const pad = SVG_EXPORT_PADDING;
-    const width = maxX - minX + 2 * pad;
-    const height = maxY - minY + 2 * pad;
-
-    const clone = svgEl.cloneNode(true) as SVGElement;
-    const style = document.createElementNS(
-      "http://www.w3.org/2000/svg",
-      "style"
-    );
-    style.textContent = EXPORT_CANVAS_STYLES;
-    clone.insertBefore(style, clone.firstChild);
-    const group = clone.querySelector("g") as SVGGElement;
-    if (group) {
-      group.setAttribute(
-        "transform",
-        `translate(${pad - minX}, ${pad - minY})`
-      );
-    }
-    clone.setAttribute("viewBox", `0 0 ${width} ${height}`);
-    clone.setAttribute("width", String(width));
-    clone.setAttribute("height", String(height));
-
     const data = new XMLSerializer().serializeToString(clone);
     await bridge.saveFile(path, data);
     showToast("Exported");
   } else {
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    for (const t of d.tables) {
-      const w = getTableWidth(t);
-      const h = HEADER_HEIGHT + t.fields.length * ROW_HEIGHT;
-      minX = Math.min(minX, t.x);
-      minY = Math.min(minY, t.y);
-      maxX = Math.max(maxX, t.x + w);
-      maxY = Math.max(maxY, t.y + h);
-    }
-    const pad = SVG_EXPORT_PADDING;
-    const width = maxX - minX + 2 * pad;
-    const height = maxY - minY + 2 * pad;
-
-    const clone = svgEl.cloneNode(true) as SVGElement;
-    const style = document.createElementNS(
-      "http://www.w3.org/2000/svg",
-      "style"
-    );
-    style.textContent = EXPORT_CANVAS_STYLES;
-    clone.insertBefore(style, clone.firstChild);
-    const group = clone.querySelector("g") as SVGGElement;
-    if (group) {
-      group.setAttribute(
-        "transform",
-        `translate(${pad - minX}, ${pad - minY})`
-      );
-    }
-    clone.setAttribute("viewBox", `0 0 ${width} ${height}`);
-    clone.setAttribute("width", String(width));
-    clone.setAttribute("height", String(height));
-
     const data = new XMLSerializer().serializeToString(clone);
     download("schema.svg", data, "image/svg+xml");
     showToast("Exported SVG");
@@ -1708,6 +1821,9 @@ interface DbConnectionConfig {
   dataset: string;
   credentialsFile: string;
   bigqueryAuthMode: string;
+  oauthClientId: string;
+  oauthClientSecret: string;
+  oauthRefreshToken: string;
 }
 
 function defaultDbConfig(): DbConnectionConfig {
@@ -1723,6 +1839,9 @@ function defaultDbConfig(): DbConnectionConfig {
     dataset: "",
     credentialsFile: "",
     bigqueryAuthMode: "service_account",
+    oauthClientId: "",
+    oauthClientSecret: "",
+    oauthRefreshToken: "",
   };
 }
 
@@ -1753,12 +1872,16 @@ async function openDatabaseConnectionDialog(): Promise<void> {
   const title = document.createElement("h2");
   title.className = "modal-title";
   title.textContent = "Import from Database";
+  const stepIndicator = document.createElement("span");
+  stepIndicator.className = "modal-dbconn-step-indicator";
+  stepIndicator.textContent = "Step 1 of 2: Connection";
   headerDiv.appendChild(title);
+  headerDiv.appendChild(stepIndicator);
   panel.appendChild(headerDiv);
 
-  // Content
-  const contentDiv = document.createElement("div");
-  contentDiv.className = "modal-dbconn-content";
+  // ─── Step 1: Connection Page ───
+  const connectionPage = document.createElement("div");
+  connectionPage.className = "modal-dbconn-content modal-dbconn-page";
 
   const cfg = defaultDbConfig();
 
@@ -1775,7 +1898,7 @@ async function openDatabaseConnectionDialog(): Promise<void> {
   profileSelect.appendChild(defaultOpt);
   profileRow.appendChild(profileLabel);
   profileRow.appendChild(profileSelect);
-  contentDiv.appendChild(profileRow);
+  connectionPage.appendChild(profileRow);
 
   // Load saved profiles
   try {
@@ -1811,7 +1934,7 @@ async function openDatabaseConnectionDialog(): Promise<void> {
   }
   driverRow.appendChild(driverLabel);
   driverRow.appendChild(driverSelect);
-  contentDiv.appendChild(driverRow);
+  connectionPage.appendChild(driverRow);
 
   // RDBMS fields container
   const rdbmsFields = document.createElement("div");
@@ -1892,7 +2015,7 @@ async function openDatabaseConnectionDialog(): Promise<void> {
   sslRow.appendChild(sslSelect);
   rdbmsFields.appendChild(sslRow);
 
-  contentDiv.appendChild(rdbmsFields);
+  connectionPage.appendChild(rdbmsFields);
 
   // BigQuery fields container
   const bqFields = document.createElement("div");
@@ -1921,11 +2044,15 @@ async function openDatabaseConnectionDialog(): Promise<void> {
   const saOpt = document.createElement("option");
   saOpt.value = "service_account";
   saOpt.textContent = "Service Account (JSON key file)";
-  const oauthOpt = document.createElement("option");
-  oauthOpt.value = "user_oauth";
-  oauthOpt.textContent = "Sign in with Google";
+  const ucOpt = document.createElement("option");
+  ucOpt.value = "user_credentials";
+  ucOpt.textContent = "User Credentials (OAuth 2.0)";
+  const adcOpt = document.createElement("option");
+  adcOpt.value = "adc";
+  adcOpt.textContent = "Application Default Credentials";
   bqAuthSelect.appendChild(saOpt);
-  bqAuthSelect.appendChild(oauthOpt);
+  bqAuthSelect.appendChild(ucOpt);
+  bqAuthSelect.appendChild(adcOpt);
   bqAuthRow.appendChild(bqAuthLabel);
   bqAuthRow.appendChild(bqAuthSelect);
   bqFields.appendChild(bqAuthRow);
@@ -1964,47 +2091,90 @@ async function openDatabaseConnectionDialog(): Promise<void> {
   saFileRow.appendChild(saFileDiv);
   bqFields.appendChild(saFileRow);
 
-  // OAuth sign-in row
-  const oauthRow = document.createElement("div");
-  oauthRow.className = "modal-dbconn-row modal-dbconn-oauth-row";
-  oauthRow.style.display = "none";
-  const oauthBtn = document.createElement("button");
-  oauthBtn.type = "button";
-  oauthBtn.className = "modal-dbconn-btn";
-  oauthBtn.textContent = "Sign in with Google";
-  const oauthStatus = document.createElement("span");
-  oauthStatus.className = "modal-dbconn-oauth-status";
-  oauthRow.appendChild(oauthBtn);
-  oauthRow.appendChild(oauthStatus);
-  bqFields.appendChild(oauthRow);
+  // User Credentials section (Client ID, Client Secret, Refresh Token)
+  const ucSection = document.createElement("div");
+  ucSection.className = "modal-dbconn-uc-section";
+  ucSection.style.display = "none";
+
+  const ucHint = document.createElement("div");
+  ucHint.className = "modal-dbconn-hint";
+  ucHint.textContent = "Provide your OAuth 2.0 Client ID, Client Secret, and Refresh Token. You can obtain these from the Google Cloud Console.";
+  ucSection.appendChild(ucHint);
+
+  const clientIdRow = document.createElement("div");
+  clientIdRow.className = "modal-dbconn-row";
+  const clientIdLabel = document.createElement("label");
+  clientIdLabel.textContent = "Client ID";
+  const clientIdInput = document.createElement("input");
+  clientIdInput.type = "text";
+  clientIdInput.className = "modal-input";
+  clientIdInput.placeholder = "OAuth 2.0 Client ID";
+  clientIdRow.appendChild(clientIdLabel);
+  clientIdRow.appendChild(clientIdInput);
+  ucSection.appendChild(clientIdRow);
+
+  const clientSecretRow = document.createElement("div");
+  clientSecretRow.className = "modal-dbconn-row";
+  const clientSecretLabel = document.createElement("label");
+  clientSecretLabel.textContent = "Client Secret";
+  const clientSecretInput = document.createElement("input");
+  clientSecretInput.type = "password";
+  clientSecretInput.className = "modal-input";
+  clientSecretInput.placeholder = "OAuth 2.0 Client Secret";
+  clientSecretRow.appendChild(clientSecretLabel);
+  clientSecretRow.appendChild(clientSecretInput);
+  ucSection.appendChild(clientSecretRow);
+
+  const refreshTokenRow = document.createElement("div");
+  refreshTokenRow.className = "modal-dbconn-row";
+  const refreshTokenLabel = document.createElement("label");
+  refreshTokenLabel.textContent = "Refresh Token";
+  const refreshTokenInput = document.createElement("input");
+  refreshTokenInput.type = "password";
+  refreshTokenInput.className = "modal-input";
+  refreshTokenInput.placeholder = "OAuth 2.0 Refresh Token";
+  refreshTokenRow.appendChild(refreshTokenLabel);
+  refreshTokenRow.appendChild(refreshTokenInput);
+  ucSection.appendChild(refreshTokenRow);
+
+  bqFields.appendChild(ucSection);
+
+  // ADC hint section
+  const adcSection = document.createElement("div");
+  adcSection.className = "modal-dbconn-adc-section";
+  adcSection.style.display = "none";
+  const adcHint = document.createElement("div");
+  adcHint.className = "modal-dbconn-hint";
+  adcHint.innerHTML =
+    "Uses credentials from <code>gcloud auth application-default login</code>. " +
+    "Run this command in your terminal before connecting.";
+  adcSection.appendChild(adcHint);
+  bqFields.appendChild(adcSection);
 
   bqAuthSelect.addEventListener("change", () => {
-    const isOAuth = bqAuthSelect.value === "user_oauth";
-    saFileRow.style.display = isOAuth ? "none" : "";
-    oauthRow.style.display = isOAuth ? "flex" : "none";
+    const mode = bqAuthSelect.value;
+    saFileRow.style.display = mode === "service_account" ? "" : "none";
+    ucSection.style.display = mode === "user_credentials" ? "" : "none";
+    adcSection.style.display = mode === "adc" ? "" : "none";
   });
 
-  oauthBtn.onclick = async () => {
-    try {
-      oauthStatus.textContent = "Starting authentication...";
-      const bqCfg: DbConnectionConfig = {
-        ...defaultDbConfig(),
-        driver: "bigquery",
-        project: projectInput.value.trim(),
-        bigqueryAuthMode: "user_oauth",
-      };
-      const authURL = await bridge.startBigQueryOAuth(JSON.stringify(bqCfg));
-      if (authURL) {
-        // Open the auth URL in the system browser via Wails
-        window.open(authURL, "_blank");
-        oauthStatus.textContent = "Waiting for sign-in... Complete it in the browser window.";
-      }
-    } catch (e) {
-      oauthStatus.textContent = `Error: ${e instanceof Error ? e.message : String(e)}`;
-    }
-  };
+  // Try to pre-populate client ID/secret from saved config
+  if (bridge.isBackendAvailable()) {
+    bridge.loadOAuthClientConfig().then((json) => {
+      try {
+        const cfg = JSON.parse(json);
+        if (cfg.clientId && !clientIdInput.value) clientIdInput.value = cfg.clientId;
+        if (cfg.clientSecret && !clientSecretInput.value) clientSecretInput.value = cfg.clientSecret;
+      } catch (_) { /* ignore */ }
+    }).catch(() => {});
+  }
 
-  contentDiv.appendChild(bqFields);
+  connectionPage.appendChild(bqFields);
+
+  // Connection status area (inline in connection page)
+  const connStatusRow = document.createElement("div");
+  connStatusRow.className = "modal-dbconn-conn-status";
+  connectionPage.appendChild(connStatusRow);
 
   // Driver change handler
   driverSelect.addEventListener("change", () => {
@@ -2039,30 +2209,20 @@ async function openDatabaseConnectionDialog(): Promise<void> {
       bqAuthSelect.value = loaded.bigqueryAuthMode || "service_account";
       bqAuthSelect.dispatchEvent(new Event("change"));
       saFileInput.value = loaded.credentialsFile || "";
+      clientIdInput.value = loaded.oauthClientId || clientIdInput.value || "";
+      clientSecretInput.value = loaded.oauthClientSecret || clientSecretInput.value || "";
+      refreshTokenInput.value = loaded.oauthRefreshToken || "";
     } catch (e) {
       appendStatus(`Failed to load profile: ${e instanceof Error ? e.message : String(e)}`, "error");
     }
   });
 
-  panel.appendChild(contentDiv);
+  panel.appendChild(connectionPage);
 
-  // Test connection area
-  const testRow = document.createElement("div");
-  testRow.className = "modal-dbconn-test-row";
-  const testBtn = document.createElement("button");
-  testBtn.type = "button";
-  testBtn.className = "modal-dbconn-btn";
-  testBtn.textContent = "Test Connection";
-  const testStatus = document.createElement("span");
-  testStatus.className = "modal-dbconn-test-status";
-  testRow.appendChild(testBtn);
-  testRow.appendChild(testStatus);
-  panel.appendChild(testRow);
-
-  // Schema/table selection area (hidden until connection tested)
-  const selectionArea = document.createElement("div");
-  selectionArea.className = "modal-dbconn-selection";
-  selectionArea.style.display = "none";
+  // ─── Step 2: Import Page ───
+  const importPage = document.createElement("div");
+  importPage.className = "modal-dbconn-content modal-dbconn-page";
+  importPage.style.display = "none";
 
   const schemaRow = document.createElement("div");
   schemaRow.className = "modal-dbconn-row";
@@ -2072,7 +2232,7 @@ async function openDatabaseConnectionDialog(): Promise<void> {
   schemaSelect.className = "modal-input";
   schemaRow.appendChild(schemaLabel);
   schemaRow.appendChild(schemaSelect);
-  selectionArea.appendChild(schemaRow);
+  importPage.appendChild(schemaRow);
 
   const tableHeader = document.createElement("div");
   tableHeader.className = "modal-dbconn-table-header";
@@ -2084,16 +2244,17 @@ async function openDatabaseConnectionDialog(): Promise<void> {
   selectAllBtn.textContent = "Select All";
   tableHeader.appendChild(tableLabel);
   tableHeader.appendChild(selectAllBtn);
-  selectionArea.appendChild(tableHeader);
+  importPage.appendChild(tableHeader);
 
   const tableList = document.createElement("div");
   tableList.className = "modal-dbconn-table-list";
-  selectionArea.appendChild(tableList);
+  importPage.appendChild(tableList);
 
-  panel.appendChild(selectionArea);
+  panel.appendChild(importPage);
 
   function getConfig(): DbConnectionConfig {
     const isBQ = driverSelect.value === "bigquery";
+    const isUC = isBQ && bqAuthSelect.value === "user_credentials";
     return {
       driver: driverSelect.value,
       host: isBQ ? "" : hostInput.value.trim(),
@@ -2106,40 +2267,69 @@ async function openDatabaseConnectionDialog(): Promise<void> {
       dataset: "",
       credentialsFile: isBQ && bqAuthSelect.value === "service_account" ? saFileInput.value : "",
       bigqueryAuthMode: isBQ ? bqAuthSelect.value : "",
+      oauthClientId: isUC ? clientIdInput.value.trim() : "",
+      oauthClientSecret: isUC ? clientSecretInput.value.trim() : "",
+      oauthRefreshToken: isUC ? refreshTokenInput.value.trim() : "",
     };
   }
 
-  // Test connection
-  testBtn.onclick = async () => {
+  // ─── Wizard navigation helpers ───
+
+  /** Transition to Step 2 (Import page) */
+  async function goToImportStep(schemas: string[]): Promise<void> {
+    connectionPage.style.display = "none";
+    importPage.style.display = "";
+    stepIndicator.textContent = "Step 2 of 2: Select Tables";
+    title.textContent = "Import from Database";
+
+    // Populate schema selector
+    schemaSelect.innerHTML = "";
+    for (const s of schemas) {
+      const opt = document.createElement("option");
+      opt.value = s;
+      opt.textContent = s;
+      schemaSelect.appendChild(opt);
+    }
+
+    // Show import step footer buttons
+    saveProfileBtn.style.display = "none";
+    connectBtn.style.display = "none";
+    importBtn.style.display = "";
+    cancelBtn.textContent = "Cancel";
+
+    // Auto-load first schema's tables
+    if (schemas.length > 0) {
+      schemaSelect.dispatchEvent(new Event("change"));
+    }
+  }
+
+  // Connect handler
+  async function doConnect(): Promise<void> {
     try {
-      testStatus.textContent = "Testing...";
-      testStatus.className = "modal-dbconn-test-status";
+      connStatusRow.textContent = "Connecting...";
+      connStatusRow.className = "modal-dbconn-conn-status";
+      connectBtn.disabled = true;
       const cfgJSON = JSON.stringify(getConfig());
       const result = await bridge.testDatabaseConnection(cfgJSON);
-      testStatus.textContent = result;
-      testStatus.className = "modal-dbconn-test-status modal-dbconn-test-ok";
+      connStatusRow.textContent = result;
+      connStatusRow.className = "modal-dbconn-conn-status modal-dbconn-conn-ok";
 
       // Load schemas
       const schemasJSON = await bridge.listDatabaseSchemas(cfgJSON);
       const schemas = JSON.parse(schemasJSON) as string[];
-      schemaSelect.innerHTML = "";
-      for (const s of schemas) {
-        const opt = document.createElement("option");
-        opt.value = s;
-        opt.textContent = s;
-        schemaSelect.appendChild(opt);
-      }
       if (schemas.length > 0) {
-        selectionArea.style.display = "";
-        // Auto-select first schema and load tables
-        schemaSelect.dispatchEvent(new Event("change"));
+        await goToImportStep(schemas);
+      } else {
+        connStatusRow.textContent = "Connected, but no schemas found.";
+        connStatusRow.className = "modal-dbconn-conn-status modal-dbconn-conn-err";
       }
     } catch (e) {
-      testStatus.textContent = `Error: ${e instanceof Error ? e.message : String(e)}`;
-      testStatus.className = "modal-dbconn-test-status modal-dbconn-test-err";
-      selectionArea.style.display = "none";
+      connStatusRow.textContent = `Error: ${e instanceof Error ? e.message : String(e)}`;
+      connStatusRow.className = "modal-dbconn-conn-status modal-dbconn-conn-err";
+    } finally {
+      connectBtn.disabled = false;
     }
-  };
+  }
 
   // Schema change -> load tables
   schemaSelect.addEventListener("change", async () => {
@@ -2168,6 +2358,8 @@ async function openDatabaseConnectionDialog(): Promise<void> {
         row.appendChild(span);
         tableList.appendChild(row);
       }
+      allSelected = true;
+      selectAllBtn.textContent = "Deselect All";
     } catch (e) {
       tableList.innerHTML = `<div style="color: var(--danger); font-size:0.85rem; padding:0.5rem;">Error: ${e instanceof Error ? e.message : String(e)}</div>`;
     }
@@ -2182,11 +2374,12 @@ async function openDatabaseConnectionDialog(): Promise<void> {
     checkboxes.forEach((cb) => (cb.checked = allSelected));
   };
 
-  // Footer
+  // ─── Footer ───
   const footerDiv = document.createElement("div");
   footerDiv.className = "modal-dbconn-footer";
   const footerLeft = document.createElement("div");
   footerLeft.className = "modal-dbconn-footer-left";
+
   const saveProfileBtn = document.createElement("button");
   saveProfileBtn.type = "button";
   saveProfileBtn.className = "modal-dbconn-btn-sm";
@@ -2198,6 +2391,9 @@ async function openDatabaseConnectionDialog(): Promise<void> {
       const cfgToSave = getConfig();
       const password = cfgToSave.password;
       cfgToSave.password = ""; // Don't save password to profile file
+      // Don't persist sensitive OAuth tokens in the profile file
+      cfgToSave.oauthRefreshToken = "";
+      cfgToSave.oauthClientSecret = "";
       await bridge.saveConnectionProfile(name, JSON.stringify(cfgToSave));
       // Save password to OS keyring if non-empty
       if (password) {
@@ -2206,6 +2402,15 @@ async function openDatabaseConnectionDialog(): Promise<void> {
         } catch (_) {
           appendStatus("Could not save password to OS credential manager", "error");
         }
+      }
+      // Persist OAuth client config globally for reuse across profiles
+      if (cfgToSave.oauthClientId) {
+        try {
+          await bridge.saveOAuthClientConfig(
+            clientIdInput.value.trim(),
+            clientSecretInput.value.trim()
+          );
+        } catch (_) { /* non-fatal */ }
       }
       showToast("Profile saved");
       // Add to dropdown if not already present
@@ -2224,10 +2429,19 @@ async function openDatabaseConnectionDialog(): Promise<void> {
 
   const footerRight = document.createElement("div");
   footerRight.className = "modal-dbconn-footer-right";
+
+  const connectBtn = document.createElement("button");
+  connectBtn.type = "button";
+  connectBtn.className = "modal-dbconn-btn modal-dbconn-btn-primary";
+  connectBtn.textContent = "Connect";
+  connectBtn.onclick = () => doConnect();
+
   const importBtn = document.createElement("button");
   importBtn.type = "button";
   importBtn.className = "modal-dbconn-btn modal-dbconn-btn-primary";
   importBtn.textContent = "Import";
+  importBtn.style.display = "none";
+
   const cancelBtn = document.createElement("button");
   cancelBtn.type = "button";
   cancelBtn.className = "modal-dbconn-btn";
@@ -2302,6 +2516,7 @@ async function openDatabaseConnectionDialog(): Promise<void> {
     }
   };
 
+  footerRight.appendChild(connectBtn);
   footerRight.appendChild(importBtn);
   footerRight.appendChild(cancelBtn);
   footerDiv.appendChild(footerLeft);
@@ -2659,32 +2874,43 @@ function setupCanvas(): void {
     }
   });
   svg.addEventListener("drop", (e) => {
-    const catalogId = e.dataTransfer?.getData("catalogTableId");
-    if (!catalogId) return;
+    const catalogIdData = e.dataTransfer?.getData("catalogTableId");
+    if (!catalogIdData) return;
     e.preventDefault();
     const doc = getActiveDoc();
     if (doc?.type !== "workspace") return;
     const w = doc as WorkspaceDoc;
     const inner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
     if (!inner) return;
-    const catalogEntry = w.catalogTables.find((c) => c.id === catalogId);
-    if (!catalogEntry) return;
+    const catalogIds = catalogIdData.split(",").filter(Boolean);
     const pt = screenToDiagram(e.clientX, e.clientY);
-    const newTable = inner.store.addTableWithContent(
-      pt.x,
-      pt.y,
-      catalogEntry.name,
-      catalogEntry.fields.map((f) => ({
-        name: f.name,
-        type: f.type,
-        nullable: f.nullable,
-        primaryKey: f.primaryKey,
-      })),
-      catalogId
-    );
-    createDiagramRelationshipsFromCatalog(w, inner, catalogId, newTable);
+    let offsetY = 0;
+    const added: string[] = [];
+    for (const catalogId of catalogIds) {
+      const catalogEntry = w.catalogTables.find((c) => c.id === catalogId);
+      if (!catalogEntry) continue;
+      const newTable = inner.store.addTableWithContent(
+        pt.x,
+        pt.y + offsetY,
+        catalogEntry.name,
+        catalogEntry.fields.map((f) => ({
+          name: f.name,
+          type: f.type,
+          nullable: f.nullable,
+          primaryKey: f.primaryKey,
+        })),
+        catalogId
+      );
+      createDiagramRelationshipsFromCatalog(w, inner, catalogId, newTable);
+      offsetY += 40 + catalogEntry.fields.length * 22; // stack below previous table
+      added.push(catalogEntry.name);
+    }
     render();
-    appendStatus(`Added ${catalogEntry.name} from catalog`);
+    if (added.length === 1) {
+      appendStatus(`Added ${added[0]} from catalog`);
+    } else if (added.length > 1) {
+      appendStatus(`Added ${added.length} tables from catalog`);
+    }
   });
 
   svg.addEventListener("mousedown", (e) => {
@@ -3059,6 +3285,96 @@ function setupCanvas(): void {
 const DELETE_ICON_SVG =
   '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>';
 
+const DIALECT_LABELS: Record<string, string> = {
+  postgres: "PostgreSQL",
+  mysql: "MySQL",
+  mssql: "SQL Server",
+  bigquery: "BigQuery",
+};
+
+/** Build FieldTypeOverride record from the overrides map, omitting empty entries. */
+function buildTypeOverrides(overrides: Record<string, string>): Record<string, FieldTypeOverride> | undefined {
+  const result: Record<string, FieldTypeOverride> = {};
+  let hasAny = false;
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v && v.trim()) {
+      result[k] = { type: v.trim() };
+      hasAny = true;
+    }
+  }
+  return hasAny ? result : undefined;
+}
+
+/** Show a popover to edit per-database type overrides for a field. */
+function showOverridesPopover(anchor: HTMLElement, overrides: Record<string, string>): void {
+  // Remove any existing popover
+  document.querySelectorAll(".field-overrides-popover").forEach((p) => p.remove());
+
+  const pop = document.createElement("div");
+  pop.className = "field-overrides-popover";
+
+  const heading = document.createElement("div");
+  heading.className = "field-overrides-popover-heading";
+  heading.textContent = "Type Overrides";
+  pop.appendChild(heading);
+
+  const dialects = ["postgres", "mysql", "mssql", "bigquery"];
+  const inputs: Record<string, HTMLInputElement> = {};
+  for (const d of dialects) {
+    const row = document.createElement("div");
+    row.className = "field-overrides-row";
+    const label = document.createElement("label");
+    label.textContent = DIALECT_LABELS[d] || d;
+    label.className = "field-overrides-label";
+    const inp = document.createElement("input");
+    inp.type = "text";
+    inp.className = "field-overrides-input";
+    inp.placeholder = "default";
+    inp.value = overrides[d] || "";
+    inputs[d] = inp;
+    row.appendChild(label);
+    row.appendChild(inp);
+    pop.appendChild(row);
+  }
+
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.className = "field-overrides-close-btn";
+  closeBtn.textContent = "Done";
+  closeBtn.onclick = () => {
+    for (const d of dialects) {
+      const val = inputs[d].value.trim();
+      if (val) overrides[d] = val;
+      else delete overrides[d];
+    }
+    pop.remove();
+  };
+  pop.appendChild(closeBtn);
+
+  // Position near the anchor
+  const rect = anchor.getBoundingClientRect();
+  pop.style.position = "fixed";
+  pop.style.top = `${rect.bottom + 4}px`;
+  pop.style.left = `${rect.left - 200}px`;
+  pop.style.zIndex = "10001";
+
+  document.body.appendChild(pop);
+
+  // Close on click outside
+  const handler = (e: MouseEvent) => {
+    if (!pop.contains(e.target as Node) && e.target !== anchor) {
+      for (const d of dialects) {
+        const val = inputs[d].value.trim();
+        if (val) overrides[d] = val;
+        else delete overrides[d];
+      }
+      pop.remove();
+      document.removeEventListener("mousedown", handler);
+    }
+  };
+  setTimeout(() => document.addEventListener("mousedown", handler), 0);
+}
+
 function showTableEditor(tableId: string): void {
   const d = store.getDiagram();
   const t = d.tables.find((x) => x.id === tableId);
@@ -3102,8 +3418,12 @@ function showTableEditor(tableId: string): void {
       <th style="width:24px"></th>
       <th>Name</th>
       <th>Type</th>
+      <th style="width:60px" title="Length (string types)">Len</th>
+      <th style="width:60px" title="Precision (numeric types)">Prec</th>
+      <th style="width:60px" title="Scale (numeric types)">Scale</th>
       <th style="width:70px">Nullable</th>
       <th style="width:80px">Primary Key</th>
+      <th style="width:32px" title="Per-database type overrides"></th>
       <th style="width:40px"></th>
     </tr></thead>
     <tbody></tbody>
@@ -3113,8 +3433,12 @@ function showTableEditor(tableId: string): void {
     id?: string;
     nameInput: HTMLInputElement;
     typeSelect: HTMLSelectElement;
+    lengthInput: HTMLInputElement;
+    precisionInput: HTMLInputElement;
+    scaleInput: HTMLInputElement;
     nullableCb: HTMLInputElement;
     pkCb: HTMLInputElement;
+    overrides: Record<string, string>;
     tr: HTMLTableRowElement;
   }[] = [];
   let fieldDragSrcIndex: number | null = null;
@@ -3125,6 +3449,10 @@ function showTableEditor(tableId: string): void {
     type: string;
     nullable?: boolean;
     primaryKey?: boolean;
+    length?: number;
+    precision?: number;
+    scale?: number;
+    typeOverrides?: Record<string, FieldTypeOverride>;
   }) {
     const tr = document.createElement("tr");
     tr.draggable = true;
@@ -3142,14 +3470,67 @@ function showTableEditor(tableId: string): void {
     const typeTd = document.createElement("td");
     const typeSel = document.createElement("select");
     typeSel.className = "modal-field-type-select";
+    let typeFound = false;
     FIELD_TYPES.forEach((ft) => {
       const opt = document.createElement("option");
       opt.value = ft;
       opt.textContent = ft;
-      if (ft === f.type) opt.selected = true;
+      if (ft === f.type) { opt.selected = true; typeFound = true; }
       typeSel.appendChild(opt);
     });
+    // Backward compat: if old type doesn't match, add it as a custom option
+    if (!typeFound && f.type) {
+      const opt = document.createElement("option");
+      opt.value = f.type;
+      opt.textContent = f.type;
+      opt.selected = true;
+      typeSel.appendChild(opt);
+    }
     typeTd.appendChild(typeSel);
+
+    // Length input (shown for string types)
+    const lenTd = document.createElement("td");
+    const lenIn = document.createElement("input");
+    lenIn.type = "number";
+    lenIn.min = "0";
+    lenIn.className = "modal-field-dim-input";
+    lenIn.title = "Length (for string types)";
+    if (f.length != null && f.length > 0) lenIn.value = String(f.length);
+    lenTd.appendChild(lenIn);
+
+    // Precision input (shown for numeric types)
+    const precTd = document.createElement("td");
+    const precIn = document.createElement("input");
+    precIn.type = "number";
+    precIn.min = "0";
+    precIn.className = "modal-field-dim-input";
+    precIn.title = "Precision (for numeric types)";
+    if (f.precision != null && f.precision > 0) precIn.value = String(f.precision);
+    precTd.appendChild(precIn);
+
+    // Scale input (shown for numeric types)
+    const scaleTd = document.createElement("td");
+    const scaleIn = document.createElement("input");
+    scaleIn.type = "number";
+    scaleIn.min = "0";
+    scaleIn.className = "modal-field-dim-input";
+    scaleIn.title = "Scale (for numeric types)";
+    if (f.scale != null && f.scale > 0) scaleIn.value = String(f.scale);
+    scaleTd.appendChild(scaleIn);
+
+    // Toggle visibility based on type
+    function updateDimVisibility() {
+      const tv = typeSel.value;
+      lenIn.disabled = tv !== "string";
+      lenIn.style.opacity = tv === "string" ? "1" : "0.3";
+      precIn.disabled = tv !== "numeric";
+      precIn.style.opacity = tv === "numeric" ? "1" : "0.3";
+      scaleIn.disabled = tv !== "numeric";
+      scaleIn.style.opacity = tv === "numeric" ? "1" : "0.3";
+    }
+    updateDimVisibility();
+    typeSel.addEventListener("change", updateDimVisibility);
+
     const nullTd = document.createElement("td");
     const nullableCb = document.createElement("input");
     nullableCb.type = "checkbox";
@@ -3160,6 +3541,23 @@ function showTableEditor(tableId: string): void {
     pkCb.type = "checkbox";
     pkCb.checked = f.primaryKey ?? false;
     pkTd.appendChild(pkCb);
+
+    // Overrides button
+    const overrides: Record<string, string> = {};
+    if (f.typeOverrides) {
+      for (const [k, v] of Object.entries(f.typeOverrides)) {
+        overrides[k] = v.type;
+      }
+    }
+    const ovTd = document.createElement("td");
+    const ovBtn = document.createElement("button");
+    ovBtn.type = "button";
+    ovBtn.className = "modal-field-overrides-btn";
+    ovBtn.title = "Per-database type overrides";
+    ovBtn.textContent = "\u2699"; // gear icon
+    ovBtn.onclick = () => showOverridesPopover(ovBtn, overrides);
+    ovTd.appendChild(ovBtn);
+
     const delTd = document.createElement("td");
     const removeBtn = document.createElement("button");
     removeBtn.type = "button";
@@ -3175,8 +3573,12 @@ function showTableEditor(tableId: string): void {
     tr.appendChild(dragTd);
     tr.appendChild(nameTd);
     tr.appendChild(typeTd);
+    tr.appendChild(lenTd);
+    tr.appendChild(precTd);
+    tr.appendChild(scaleTd);
     tr.appendChild(nullTd);
     tr.appendChild(pkTd);
+    tr.appendChild(ovTd);
     tr.appendChild(delTd);
     tbody.appendChild(tr);
 
@@ -3213,8 +3615,12 @@ function showTableEditor(tableId: string): void {
       id: f.id,
       nameInput: nameIn,
       typeSelect: typeSel,
+      lengthInput: lenIn,
+      precisionInput: precIn,
+      scaleInput: scaleIn,
       nullableCb,
       pkCb,
+      overrides,
       tr,
     };
     rows.push(rec);
@@ -3228,6 +3634,10 @@ function showTableEditor(tableId: string): void {
       type: f.type,
       nullable: f.nullable,
       primaryKey: f.primaryKey,
+      length: f.length,
+      precision: f.precision,
+      scale: f.scale,
+      typeOverrides: f.typeOverrides,
     })
   );
   fieldsSection.appendChild(fieldsTable);
@@ -3240,7 +3650,7 @@ function showTableEditor(tableId: string): void {
   addFieldPlus.onclick = () => {
     const newNameInput = addFieldRow({
       name: "field",
-      type: "text",
+      type: "string",
       nullable: false,
       primaryKey: false,
     });
@@ -3499,6 +3909,10 @@ function showTableEditor(tableId: string): void {
         type: r.typeSelect.value,
         nullable: r.nullableCb.checked,
         primaryKey: r.pkCb.checked,
+        length: r.lengthInput.value ? parseInt(r.lengthInput.value, 10) || undefined : undefined,
+        precision: r.precisionInput.value ? parseInt(r.precisionInput.value, 10) || undefined : undefined,
+        scale: r.scaleInput.value ? parseInt(r.scaleInput.value, 10) || undefined : undefined,
+        typeOverrides: buildTypeOverrides(r.overrides),
       }));
       catalogEntry.name = name;
       catalogEntry.fields = fields.map((f, i) => ({
@@ -3507,6 +3921,10 @@ function showTableEditor(tableId: string): void {
         type: f.type,
         nullable: f.nullable,
         primaryKey: f.primaryKey,
+        length: f.length,
+        precision: f.precision,
+        scale: f.scale,
+        typeOverrides: f.typeOverrides,
       }));
       const diagram = store.getDiagram();
       const relsForTable = (diagram.relationships ?? []).filter(
@@ -3564,6 +3982,10 @@ function showTableEditor(tableId: string): void {
       type: r.typeSelect.value,
       nullable: r.nullableCb.checked,
       primaryKey: r.pkCb.checked,
+      length: r.lengthInput.value ? parseInt(r.lengthInput.value, 10) || undefined : undefined,
+      precision: r.precisionInput.value ? parseInt(r.precisionInput.value, 10) || undefined : undefined,
+      scale: r.scaleInput.value ? parseInt(r.scaleInput.value, 10) || undefined : undefined,
+      typeOverrides: buildTypeOverrides(r.overrides),
     }));
     store.replaceTableContent(tableId, name, fields);
     syncTableToCatalogAndDiagrams(tableId);
@@ -3623,8 +4045,12 @@ function showCatalogTableEditor(w: WorkspaceDoc, catalogId: string): void {
       <th style="width:24px"></th>
       <th>Name</th>
       <th>Type</th>
+      <th style="width:60px" title="Length (string types)">Len</th>
+      <th style="width:60px" title="Precision (numeric types)">Prec</th>
+      <th style="width:60px" title="Scale (numeric types)">Scale</th>
       <th style="width:70px">Nullable</th>
       <th style="width:80px">Primary Key</th>
+      <th style="width:32px" title="Per-database type overrides"></th>
       <th style="width:40px"></th>
     </tr></thead>
     <tbody></tbody>
@@ -3634,8 +4060,12 @@ function showCatalogTableEditor(w: WorkspaceDoc, catalogId: string): void {
     id?: string;
     nameInput: HTMLInputElement;
     typeSelect: HTMLSelectElement;
+    lengthInput: HTMLInputElement;
+    precisionInput: HTMLInputElement;
+    scaleInput: HTMLInputElement;
     nullableCb: HTMLInputElement;
     pkCb: HTMLInputElement;
+    overrides: Record<string, string>;
     tr: HTMLTableRowElement;
   }[] = [];
   let fieldDragSrcIndex: number | null = null;
@@ -3646,6 +4076,10 @@ function showCatalogTableEditor(w: WorkspaceDoc, catalogId: string): void {
     type: string;
     nullable?: boolean;
     primaryKey?: boolean;
+    length?: number;
+    precision?: number;
+    scale?: number;
+    typeOverrides?: Record<string, FieldTypeOverride>;
   }) {
     const tr = document.createElement("tr");
     tr.draggable = true;
@@ -3663,14 +4097,62 @@ function showCatalogTableEditor(w: WorkspaceDoc, catalogId: string): void {
     const typeTd = document.createElement("td");
     const typeSel = document.createElement("select");
     typeSel.className = "modal-field-type-select";
+    let typeFound = false;
     FIELD_TYPES.forEach((ft) => {
       const opt = document.createElement("option");
       opt.value = ft;
       opt.textContent = ft;
-      if (ft === f.type) opt.selected = true;
+      if (ft === f.type) { opt.selected = true; typeFound = true; }
       typeSel.appendChild(opt);
     });
+    if (!typeFound && f.type) {
+      const opt = document.createElement("option");
+      opt.value = f.type;
+      opt.textContent = f.type;
+      opt.selected = true;
+      typeSel.appendChild(opt);
+    }
     typeTd.appendChild(typeSel);
+
+    const lenTd = document.createElement("td");
+    const lenIn = document.createElement("input");
+    lenIn.type = "number";
+    lenIn.min = "0";
+    lenIn.className = "modal-field-dim-input";
+    lenIn.title = "Length (for string types)";
+    if (f.length != null && f.length > 0) lenIn.value = String(f.length);
+    lenTd.appendChild(lenIn);
+
+    const precTd = document.createElement("td");
+    const precIn = document.createElement("input");
+    precIn.type = "number";
+    precIn.min = "0";
+    precIn.className = "modal-field-dim-input";
+    precIn.title = "Precision (for numeric types)";
+    if (f.precision != null && f.precision > 0) precIn.value = String(f.precision);
+    precTd.appendChild(precIn);
+
+    const scaleTd = document.createElement("td");
+    const scaleIn = document.createElement("input");
+    scaleIn.type = "number";
+    scaleIn.min = "0";
+    scaleIn.className = "modal-field-dim-input";
+    scaleIn.title = "Scale (for numeric types)";
+    if (f.scale != null && f.scale > 0) scaleIn.value = String(f.scale);
+    scaleTd.appendChild(scaleIn);
+
+    function updateDimVisibility() {
+      const tv = typeSel.value;
+      lenIn.disabled = tv !== "string";
+      lenIn.style.opacity = tv === "string" ? "1" : "0.3";
+      precIn.disabled = tv !== "numeric";
+      precIn.style.opacity = tv === "numeric" ? "1" : "0.3";
+      scaleIn.disabled = tv !== "numeric";
+      scaleIn.style.opacity = tv === "numeric" ? "1" : "0.3";
+    }
+    updateDimVisibility();
+    typeSel.addEventListener("change", updateDimVisibility);
+
     const nullTd = document.createElement("td");
     const nullableCb = document.createElement("input");
     nullableCb.type = "checkbox";
@@ -3681,6 +4163,22 @@ function showCatalogTableEditor(w: WorkspaceDoc, catalogId: string): void {
     pkCb.type = "checkbox";
     pkCb.checked = f.primaryKey ?? false;
     pkTd.appendChild(pkCb);
+
+    const overrides: Record<string, string> = {};
+    if (f.typeOverrides) {
+      for (const [k, v] of Object.entries(f.typeOverrides)) {
+        overrides[k] = v.type;
+      }
+    }
+    const ovTd = document.createElement("td");
+    const ovBtn = document.createElement("button");
+    ovBtn.type = "button";
+    ovBtn.className = "modal-field-overrides-btn";
+    ovBtn.title = "Per-database type overrides";
+    ovBtn.textContent = "\u2699";
+    ovBtn.onclick = () => showOverridesPopover(ovBtn, overrides);
+    ovTd.appendChild(ovBtn);
+
     const delTd = document.createElement("td");
     const removeBtn = document.createElement("button");
     removeBtn.type = "button";
@@ -3696,8 +4194,12 @@ function showCatalogTableEditor(w: WorkspaceDoc, catalogId: string): void {
     tr.appendChild(dragTd);
     tr.appendChild(nameTd);
     tr.appendChild(typeTd);
+    tr.appendChild(lenTd);
+    tr.appendChild(precTd);
+    tr.appendChild(scaleTd);
     tr.appendChild(nullTd);
     tr.appendChild(pkTd);
+    tr.appendChild(ovTd);
     tr.appendChild(delTd);
     tbody.appendChild(tr);
 
@@ -3734,8 +4236,12 @@ function showCatalogTableEditor(w: WorkspaceDoc, catalogId: string): void {
       id: f.id,
       nameInput: nameIn,
       typeSelect: typeSel,
+      lengthInput: lenIn,
+      precisionInput: precIn,
+      scaleInput: scaleIn,
       nullableCb,
       pkCb,
+      overrides,
       tr,
     });
     return nameIn;
@@ -3748,6 +4254,10 @@ function showCatalogTableEditor(w: WorkspaceDoc, catalogId: string): void {
       type: f.type,
       nullable: f.nullable,
       primaryKey: f.primaryKey,
+      length: f.length,
+      precision: f.precision,
+      scale: f.scale,
+      typeOverrides: f.typeOverrides,
     })
   );
   fieldsSection.appendChild(fieldsTable);
@@ -3759,7 +4269,7 @@ function showCatalogTableEditor(w: WorkspaceDoc, catalogId: string): void {
   addFieldPlus.onclick = () => {
     const newNameInput = addFieldRow({
       name: "field",
-      type: "text",
+      type: "string",
       nullable: false,
       primaryKey: false,
     });
@@ -3994,6 +4504,10 @@ function showCatalogTableEditor(w: WorkspaceDoc, catalogId: string): void {
       type: r.typeSelect.value,
       nullable: r.nullableCb.checked,
       primaryKey: r.pkCb.checked,
+      length: r.lengthInput.value ? parseInt(r.lengthInput.value, 10) || undefined : undefined,
+      precision: r.precisionInput.value ? parseInt(r.precisionInput.value, 10) || undefined : undefined,
+      scale: r.scaleInput.value ? parseInt(r.scaleInput.value, 10) || undefined : undefined,
+      typeOverrides: buildTypeOverrides(r.overrides),
     }));
     catalogEntry.name = name;
     catalogEntry.fields = fields;
@@ -4009,6 +4523,10 @@ function showCatalogTableEditor(w: WorkspaceDoc, catalogId: string): void {
         type: cf.type,
         nullable: cf.nullable,
         primaryKey: cf.primaryKey,
+        length: cf.length,
+        precision: cf.precision,
+        scale: cf.scale,
+        typeOverrides: cf.typeOverrides,
       }));
       tab.store.replaceTableContent(table.id, name, fieldsForDiagram);
       await syncDiagramRelationshipsToCatalog(w, tab.store.getDiagram());
@@ -4030,9 +4548,13 @@ function showCatalogTableEditor(w: WorkspaceDoc, catalogId: string): void {
             const newFields = fields.map((cf, i) => ({
               id: table.fields[i]?.id ?? nextFieldId(),
               name: cf.name,
-              type: cf.type.trim().toLowerCase() || "text",
+              type: cf.type.trim().toLowerCase() || "string",
               nullable: cf.nullable ?? false,
               primaryKey: cf.primaryKey ?? false,
+              length: cf.length,
+              precision: cf.precision,
+              scale: cf.scale,
+              typeOverrides: cf.typeOverrides,
             }));
             table.fields = newFields;
             const keptIds = new Set(newFields.map((f) => f.id));
@@ -5214,7 +5736,17 @@ function renderWorkspaceView(): void {
   catalogContent.className = "workspace-accordion-content";
   const catalogList = document.createElement("div");
   catalogList.className = "workspace-catalog-list";
-  w.catalogTables.forEach((t) => {
+  const selectedCatalogIds = new Set<string>();
+  let lastClickedCatalogIdx = -1;
+
+  function updateCatalogSelection(): void {
+    catalogList.querySelectorAll<HTMLElement>(".workspace-catalog-item").forEach((el) => {
+      const id = el.dataset.catalogId ?? "";
+      el.classList.toggle("selected", selectedCatalogIds.has(id));
+    });
+  }
+
+  w.catalogTables.forEach((t, idx) => {
     const row = document.createElement("div");
     row.className = "workspace-catalog-item";
     const label = document.createElement("span");
@@ -5233,13 +5765,69 @@ function renderWorkspaceView(): void {
     row.appendChild(deleteBtn);
     row.draggable = true;
     row.dataset.catalogId = t.id;
+
+    // Selection handling: click, ctrl+click, shift+click
+    row.onmousedown = (e) => {
+      // Ignore if clicking on the delete button
+      if ((e.target as Element).closest(".workspace-catalog-item-delete")) return;
+      if (e.button !== 0) return;
+      if (e.ctrlKey || e.metaKey) {
+        // Toggle selection
+        if (selectedCatalogIds.has(t.id)) selectedCatalogIds.delete(t.id);
+        else selectedCatalogIds.add(t.id);
+        lastClickedCatalogIdx = idx;
+      } else if (e.shiftKey && lastClickedCatalogIdx >= 0) {
+        // Range select
+        const start = Math.min(lastClickedCatalogIdx, idx);
+        const end = Math.max(lastClickedCatalogIdx, idx);
+        for (let i = start; i <= end; i++) {
+          selectedCatalogIds.add(w.catalogTables[i].id);
+        }
+      } else {
+        // Single select
+        selectedCatalogIds.clear();
+        selectedCatalogIds.add(t.id);
+        lastClickedCatalogIdx = idx;
+      }
+      updateCatalogSelection();
+    };
+
     row.ondragstart = (e) => {
-      e.dataTransfer?.setData("catalogTableId", t.id);
+      // If dragging a selected item, drag all selected; otherwise just this one
+      const ids = selectedCatalogIds.has(t.id) && selectedCatalogIds.size > 1
+        ? Array.from(selectedCatalogIds)
+        : [t.id];
+      e.dataTransfer?.setData("catalogTableId", ids.join(","));
       if (e.dataTransfer) e.dataTransfer.effectAllowed = "copy";
     };
+
     row.ondblclick = () => openCatalogTableEditor(w, t.id);
+
+    // Right-click context menu
+    row.oncontextmenu = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      // Ensure this item is selected
+      if (!selectedCatalogIds.has(t.id)) {
+        if (!e.ctrlKey && !e.metaKey) selectedCatalogIds.clear();
+        selectedCatalogIds.add(t.id);
+        lastClickedCatalogIdx = idx;
+        updateCatalogSelection();
+      }
+      showCatalogContextMenu(e.clientX, e.clientY, w, selectedCatalogIds);
+    };
+
     catalogList.appendChild(row);
   });
+
+  // Click on empty space in list clears selection
+  catalogList.addEventListener("mousedown", (e) => {
+    if (e.target === catalogList) {
+      selectedCatalogIds.clear();
+      updateCatalogSelection();
+    }
+  });
+
   if (w.catalogTables.length === 0) {
     const empty = document.createElement("div");
     empty.className = "workspace-empty-msg";
@@ -5958,6 +6546,173 @@ async function getDiagramsUsingCatalogTable(
 
   const combined = [...new Set([...namesFromOpenTabs, ...namesFromFiles])];
   return combined;
+}
+
+/** Show right-click context menu for selected catalog table(s). */
+function showCatalogContextMenu(
+  x: number,
+  y: number,
+  w: WorkspaceDoc,
+  selectedIds: Set<string>
+): void {
+  // Remove any existing context menu
+  document.querySelector(".catalog-context-menu")?.remove();
+
+  const menu = document.createElement("div");
+  menu.className = "catalog-context-menu";
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+
+  const count = selectedIds.size;
+  const plural = count > 1 ? `${count} tables` : "table";
+
+  // "Add to Diagram" option
+  const addItem = document.createElement("button");
+  addItem.className = "catalog-context-menu-item";
+  addItem.textContent = `Add ${plural} to Diagram`;
+  addItem.onclick = () => {
+    menu.remove();
+    addCatalogTablesToDiagram(w, Array.from(selectedIds));
+  };
+  menu.appendChild(addItem);
+
+  // "Remove from Catalog" option
+  const removeItem = document.createElement("button");
+  removeItem.className = "catalog-context-menu-item catalog-context-menu-item-danger";
+  removeItem.textContent = `Remove ${plural} from Catalog`;
+  removeItem.onclick = () => {
+    menu.remove();
+    const ids = Array.from(selectedIds);
+    if (ids.length === 1) {
+      const entry = w.catalogTables.find((t) => t.id === ids[0]);
+      confirmRemoveCatalogTable(w, ids[0], entry?.name ?? "").catch(() => {});
+    } else {
+      confirmRemoveMultipleCatalogTables(w, ids).catch(() => {});
+    }
+  };
+  menu.appendChild(removeItem);
+
+  document.body.appendChild(menu);
+
+  // Close on next click anywhere
+  const closeHandler = (e: MouseEvent) => {
+    if (!menu.contains(e.target as Node)) {
+      menu.remove();
+      document.removeEventListener("mousedown", closeHandler, true);
+    }
+  };
+  // Delay so the current event doesn't immediately close it
+  requestAnimationFrame(() => {
+    document.addEventListener("mousedown", closeHandler, true);
+  });
+}
+
+/** Add one or more catalog tables to the active diagram. */
+function addCatalogTablesToDiagram(
+  w: WorkspaceDoc,
+  catalogIds: string[]
+): void {
+  const inner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
+  if (!inner) {
+    showToast("No diagram is open");
+    return;
+  }
+  const d = inner.store.getDiagram();
+  // Place tables in the center of the current viewport
+  const rect = svg.getBoundingClientRect();
+  const centerPt = screenToDiagram(
+    rect.left + rect.width / 2,
+    rect.top + rect.height / 2
+  );
+  let offsetY = 0;
+  const added: string[] = [];
+  for (const catalogId of catalogIds) {
+    const catalogEntry = w.catalogTables.find((c) => c.id === catalogId);
+    if (!catalogEntry) continue;
+    // Skip if already on diagram
+    if (d.tables.some((t) => t.catalogTableId === catalogId)) {
+      showToast(`"${catalogEntry.name}" is already on the diagram`);
+      continue;
+    }
+    const newTable = inner.store.addTableWithContent(
+      centerPt.x - 100,
+      centerPt.y + offsetY,
+      catalogEntry.name,
+      catalogEntry.fields.map((f) => ({
+        name: f.name,
+        type: f.type,
+        nullable: f.nullable,
+        primaryKey: f.primaryKey,
+      })),
+      catalogId
+    );
+    createDiagramRelationshipsFromCatalog(w, inner, catalogId, newTable);
+    offsetY += 40 + catalogEntry.fields.length * 22;
+    added.push(catalogEntry.name);
+  }
+  render();
+  if (added.length === 1) {
+    appendStatus(`Added ${added[0]} from catalog`);
+  } else if (added.length > 1) {
+    appendStatus(`Added ${added.length} tables from catalog`);
+  }
+}
+
+/** Confirm and remove multiple catalog tables at once. */
+async function confirmRemoveMultipleCatalogTables(
+  w: WorkspaceDoc,
+  catalogIds: string[]
+): Promise<void> {
+  const names = catalogIds.map(
+    (id) => w.catalogTables.find((t) => t.id === id)?.name ?? id
+  );
+  const message = `Remove ${catalogIds.length} tables from the catalog?\n\n${names.join(", ")}`;
+
+  const existing = document.querySelector(".modal-overlay");
+  if (existing) existing.remove();
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  const panel = document.createElement("div");
+  panel.className = "modal-panel modal-panel-confirm";
+
+  const headerDiv = document.createElement("div");
+  headerDiv.className = "modal-confirm-header";
+  const title = document.createElement("h2");
+  title.className = "modal-title";
+  title.textContent = "Delete tables";
+  headerDiv.appendChild(title);
+  panel.appendChild(headerDiv);
+
+  const contentDiv = document.createElement("div");
+  contentDiv.className = "modal-confirm-content";
+  const p = document.createElement("p");
+  p.textContent = message;
+  p.className = "modal-confirm-message";
+  contentDiv.appendChild(p);
+  panel.appendChild(contentDiv);
+
+  const footerDiv = document.createElement("div");
+  footerDiv.className = "modal-confirm-footer";
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.textContent = "Cancel";
+  cancelBtn.onclick = () => overlay.remove();
+  const deleteBtn = document.createElement("button");
+  deleteBtn.type = "button";
+  deleteBtn.textContent = "Delete";
+  deleteBtn.className = "modal-confirm-delete-btn";
+  deleteBtn.onclick = async () => {
+    overlay.remove();
+    for (const id of catalogIds) {
+      await removeCatalogTable(w, id);
+    }
+  };
+  footerDiv.appendChild(cancelBtn);
+  footerDiv.appendChild(deleteBtn);
+  panel.appendChild(footerDiv);
+
+  overlay.appendChild(panel);
+  document.body.appendChild(overlay);
 }
 
 /** Show confirmation dialog, then remove catalog table and delete it from all diagrams that use it. */

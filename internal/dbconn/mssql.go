@@ -102,7 +102,7 @@ func (m *MSSQLInspector) InspectSchema(schemaName string, tableNames []string) (
 	if err != nil {
 		return schema.TableCatalog{}, err
 	}
-	return buildCatalog(columns, pks, fks, fmt.Sprintf("%s (SQL Server)", schemaName)), nil
+	return buildCatalog(columns, pks, fks, fmt.Sprintf("%s (SQL Server)", schemaName), "mssql"), nil
 }
 
 // queryForeignKeys retrieves FK relationships for SQL Server using referential_constraints + key_column_usage.

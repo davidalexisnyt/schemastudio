@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"schemastudio/internal/schema"
+	"schemastudio/internal/sqlx"
 )
 
 const queryTimeout = 30 * time.Second
@@ -26,11 +27,14 @@ func (g *idGen) rel() string   { g.r++; return fmt.Sprintf("r%d", g.r) }
 
 // columnInfo holds metadata for a single column as read from INFORMATION_SCHEMA.
 type columnInfo struct {
-	TableName  string
-	ColumnName string
-	DataType   string
-	IsNullable bool
-	OrdinalPos int
+	TableName    string
+	ColumnName   string
+	DataType     string
+	IsNullable   bool
+	OrdinalPos   int
+	CharMaxLen   *int // from character_maximum_length
+	NumPrecision *int // from numeric_precision
+	NumScale     *int // from numeric_scale
 }
 
 // fkInfo holds a foreign key relationship as read from the database.
@@ -112,7 +116,8 @@ func queryColumnsGeneric(db *sql.DB, schemaName string, tableNames []string, ph 
 	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
 	defer cancel()
 
-	query := fmt.Sprintf(`SELECT table_name, column_name, data_type, is_nullable, ordinal_position
+	query := fmt.Sprintf(`SELECT table_name, column_name, data_type, is_nullable, ordinal_position,
+		character_maximum_length, numeric_precision, numeric_scale
 		FROM information_schema.columns
 		WHERE table_schema = %s`, ph(1))
 
@@ -137,7 +142,8 @@ func queryColumnsGeneric(db *sql.DB, schemaName string, tableNames []string, ph 
 	for rows.Next() {
 		var c columnInfo
 		var nullable string
-		if err := rows.Scan(&c.TableName, &c.ColumnName, &c.DataType, &nullable, &c.OrdinalPos); err != nil {
+		if err := rows.Scan(&c.TableName, &c.ColumnName, &c.DataType, &nullable, &c.OrdinalPos,
+			&c.CharMaxLen, &c.NumPrecision, &c.NumScale); err != nil {
 			return nil, err
 		}
 		c.IsNullable = strings.EqualFold(nullable, "YES")
@@ -187,7 +193,8 @@ func queryPKsGeneric(db *sql.DB, schemaName string, tableNames []string, ph func
 }
 
 // buildCatalog assembles a TableCatalog from column, PK, and FK data.
-func buildCatalog(columns []columnInfo, pks []pkInfo, fks []fkInfo, importSource string) schema.TableCatalog {
+// dialect identifies the source database ("postgres", "mysql", "mssql", "bigquery").
+func buildCatalog(columns []columnInfo, pks []pkInfo, fks []fkInfo, importSource, dialect string) schema.TableCatalog {
 	gen := newIDGen()
 
 	// Build PK lookup: tableName.columnName -> true
@@ -230,13 +237,44 @@ func buildCatalog(columns []columnInfo, pks []pkInfo, fks []fkInfo, importSource
 		for _, c := range td.columns {
 			fID := gen.field()
 			fieldIDMap[tblName+"."+c.ColumnName] = fID
-			fields = append(fields, schema.Field{
+
+			// Normalize the raw data_type into our generic model type
+			genericType, normLen, normPrec, normScale := sqlx.NormalizeType(c.DataType)
+
+			// Prefer INFORMATION_SCHEMA dimension values over parsed ones
+			fLen := c.CharMaxLen
+			if fLen == nil {
+				fLen = normLen
+			}
+			fPrec := c.NumPrecision
+			if fPrec == nil {
+				fPrec = normPrec
+			}
+			fScale := c.NumScale
+			if fScale == nil {
+				fScale = normScale
+			}
+
+			f := schema.Field{
 				ID:         fID,
 				Name:       c.ColumnName,
-				Type:       strings.ToLower(c.DataType),
+				Type:       genericType,
 				Nullable:   c.IsNullable,
 				PrimaryKey: pkSet[tblName+"."+c.ColumnName],
-			})
+				Length:     fLen,
+				Precision:  fPrec,
+				Scale:      fScale,
+			}
+
+			// Store the original raw data type as a dialect-specific override
+			rawLower := strings.ToLower(strings.TrimSpace(c.DataType))
+			if dialect != "" && rawLower != genericType {
+				f.TypeOverrides = map[string]schema.FieldTypeOverride{
+					dialect: {Type: rawLower},
+				}
+			}
+
+			fields = append(fields, f)
 		}
 
 		row, col := i/cols, i%cols

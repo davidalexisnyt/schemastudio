@@ -38,8 +38,8 @@ declare global {
           ListDatabaseSchemas(configJSON: string): Promise<string>;
           ListDatabaseTables(configJSON: string, schemaName: string): Promise<string>;
           ImportFromDatabase(configJSON: string, schemaName: string, tablesJSON: string): Promise<string>;
-          StartBigQueryOAuth(configJSON: string): Promise<string>;
           SaveOAuthClientConfig(clientID: string, clientSecret: string): Promise<void>;
+          LoadOAuthClientConfig(): Promise<string>;
           SaveConnectionProfile(name: string, configJSON: string): Promise<void>;
           LoadConnectionProfile(name: string): Promise<string>;
           ListConnectionProfiles(): Promise<string>;
@@ -223,16 +223,16 @@ export async function importFromDatabase(
   return app.ImportFromDatabase(configJSON, schemaName, tablesJSON);
 }
 
-export async function startBigQueryOAuth(configJSON: string): Promise<string> {
-  const app = getApp();
-  if (!app) throw new Error("Backend not available");
-  return app.StartBigQueryOAuth(configJSON);
-}
-
 export async function saveOAuthClientConfig(clientID: string, clientSecret: string): Promise<void> {
   const app = getApp();
   if (!app) throw new Error("Backend not available");
   return app.SaveOAuthClientConfig(clientID, clientSecret);
+}
+
+export async function loadOAuthClientConfig(): Promise<string> {
+  const app = getApp();
+  if (!app) return "{}";
+  return app.LoadOAuthClientConfig();
 }
 
 export async function saveConnectionProfile(name: string, configJSON: string): Promise<void> {

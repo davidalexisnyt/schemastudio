@@ -23,7 +23,7 @@ func TestBuildCatalog_Basic(t *testing.T) {
 		{SourceTable: "orders", SourceColumn: "user_id", TargetTable: "users", TargetColumn: "id"},
 	}
 
-	catalog := buildCatalog(columns, pks, fks, "test (PostgreSQL)")
+	catalog := buildCatalog(columns, pks, fks, "test (PostgreSQL)", "postgres")
 
 	if catalog.ImportSource != "test (PostgreSQL)" {
 		t.Errorf("expected import source 'test (PostgreSQL)', got %q", catalog.ImportSource)
@@ -91,7 +91,7 @@ func TestBuildCatalog_Basic(t *testing.T) {
 }
 
 func TestBuildCatalog_EmptyInput(t *testing.T) {
-	catalog := buildCatalog(nil, nil, nil, "empty")
+	catalog := buildCatalog(nil, nil, nil, "empty", "")
 	if len(catalog.Tables) != 0 {
 		t.Errorf("expected 0 tables, got %d", len(catalog.Tables))
 	}
@@ -109,7 +109,7 @@ func TestBuildCatalog_GridLayout(t *testing.T) {
 		})
 	}
 
-	catalog := buildCatalog(columns, nil, nil, "grid-test")
+	catalog := buildCatalog(columns, nil, nil, "grid-test", "postgres")
 
 	if len(catalog.Tables) != 5 {
 		t.Fatalf("expected 5 tables, got %d", len(catalog.Tables))
@@ -132,15 +132,16 @@ func TestBuildCatalog_GridLayout(t *testing.T) {
 	}
 }
 
-func TestBuildCatalog_TypesLowercased(t *testing.T) {
+func TestBuildCatalog_TypesNormalized(t *testing.T) {
 	columns := []columnInfo{
 		{TableName: "t1", ColumnName: "col1", DataType: "VARCHAR", IsNullable: false, OrdinalPos: 1},
 		{TableName: "t1", ColumnName: "col2", DataType: "INTEGER", IsNullable: false, OrdinalPos: 2},
 	}
 
-	catalog := buildCatalog(columns, nil, nil, "types-test")
-	if catalog.Tables[0].Fields[0].Type != "varchar" {
-		t.Errorf("expected type 'varchar', got %q", catalog.Tables[0].Fields[0].Type)
+	catalog := buildCatalog(columns, nil, nil, "types-test", "postgres")
+	// VARCHAR normalizes to "string", INTEGER normalizes to "integer"
+	if catalog.Tables[0].Fields[0].Type != "string" {
+		t.Errorf("expected type 'string', got %q", catalog.Tables[0].Fields[0].Type)
 	}
 	if catalog.Tables[0].Fields[1].Type != "integer" {
 		t.Errorf("expected type 'integer', got %q", catalog.Tables[0].Fields[1].Type)
@@ -156,7 +157,7 @@ func TestBuildCatalog_FKUnresolvedIgnored(t *testing.T) {
 		{SourceTable: "orders", SourceColumn: "user_id", TargetTable: "users", TargetColumn: "id"},
 	}
 
-	catalog := buildCatalog(columns, nil, fks, "fk-unresolved")
+	catalog := buildCatalog(columns, nil, fks, "fk-unresolved", "postgres")
 	if len(catalog.Relationships) != 0 {
 		t.Errorf("expected 0 relationships (unresolved FK), got %d", len(catalog.Relationships))
 	}

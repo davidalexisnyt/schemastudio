@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"schemastudio/internal/schema"
+	"schemastudio/internal/sqlx"
 )
 
 // ParseCSV parses a CSV with columns: schema, table, column, type, is_nullable, field_order.
@@ -82,10 +83,11 @@ func ParseCSV(csvContent string) (schema.TableCatalog, error) {
 		for _, ro := range rowOrders {
 			row := rows[ro.rowIndex]
 			colName := strings.TrimSpace(row[columnIdx])
-			colType := "string"
+			rawType := "string"
 			if typeIdx < len(row) {
-				colType = strings.TrimSpace(strings.ToLower(row[typeIdx]))
+				rawType = strings.TrimSpace(row[typeIdx])
 			}
+			genericType, length, precision, scale := sqlx.NormalizeType(rawType)
 			nullable := true
 			if okN && nullableIdx < len(row) {
 				v := strings.TrimSpace(strings.ToLower(row[nullableIdx]))
@@ -93,11 +95,13 @@ func ParseCSV(csvContent string) (schema.TableCatalog, error) {
 			}
 			fID := idGen.field()
 			t.Fields = append(t.Fields, schema.Field{
-				ID:         fID,
-				Name:       colName,
-				Type:       colType,
-				Nullable:   nullable,
-				PrimaryKey: false,
+				ID:        fID,
+				Name:      colName,
+				Type:      genericType,
+				Nullable:  nullable,
+				Length:    length,
+				Precision: precision,
+				Scale:     scale,
 			})
 		}
 		row, col := ti/cols, ti%cols
