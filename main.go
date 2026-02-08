@@ -11,7 +11,7 @@ import (
 	"schemastudio/internal/app"
 )
 
-var Version string = "0.4.0"
+var Version string = "0.4.1"
 
 //go:embed all:frontend/dist
 var assets embed.FS
@@ -27,6 +27,7 @@ func main() {
 		},
 		BackgroundColour: &options.RGBA{R: 0x1e, G: 0x1e, B: 0x2e, A: 0xff},
 		OnStartup:        a.Startup,
+		OnShutdown:       a.Shutdown,
 		Bind: []interface{}{
 			a,
 		},

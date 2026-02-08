@@ -90,10 +90,14 @@ const TRASH_ICON_SVG =
 
 // --- App shell (landing vs editor, tabs) ---
 type ViewMode = "landing" | "editor";
+// Legacy file names (kept for migration tool reference).
 const WORKSPACE_CONFIG_FILE = "workspace.config.json";
 const TABLE_CATALOG_FILE = "table_catalog.json";
 const CATALOG_RELATIONSHIPS_FILE = "catalog_relationships.json";
 const WORKSPACE_STATE_FILE = "workspace.state";
+
+// File extension for the new SQLite-backed workspace format.
+const SCHEMASTUDIO_EXT = "*.schemastudio";
 
 type DiagramDoc = {
   type: "diagram";
@@ -104,14 +108,20 @@ type DiagramDoc = {
 };
 type InnerDiagramTab = {
   id: string;
+  diagramId: string; // SQLite diagram ID
   label: string;
   store: Store;
-  path: string; // full path under workspace root
+  path: string; // kept for legacy compat; empty for new workspaces
 };
 type WorkspaceDoc = {
   type: "workspace";
   id: string;
+  /** Backend workspace ID (maps to an open SQLite connection). */
+  workspaceId: string;
   label: string;
+  /** Path to the .schemastudio file. */
+  filePath: string;
+  /** Legacy rootPath for backward compat during migration. */
   rootPath: string;
   name: string;
   description?: string;
@@ -915,31 +925,45 @@ async function saveDiagram(): Promise<boolean> {
     showToast("Backend not available (run in Wails)");
     return false;
   }
-  let path = currentFilePath;
-  if (!path) {
-    try {
-      path = await bridge.saveFileDialog(
-        "Save diagram",
-        "schema.diagram",
-        "Diagram",
-        "*.diagram"
-      );
-    } catch (e) {
-      showToast("Save failed: " + (e as Error).message);
-      return false;
-    }
-    if (!path) return false;
-    currentFilePath = path;
-  }
   try {
     const doc = getActiveDoc();
     if (doc?.type === "workspace") {
       const w = doc as WorkspaceDoc;
+      const inner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
       await syncDiagramRelationshipsToCatalog(w, store.getDiagram());
-    }
-    await bridge.saveFile(path, JSON.stringify(store.getDiagram()));
-    store.clearDirty();
-    if (doc && doc.type === "diagram") {
+      if (inner && inner.diagramId) {
+        // SQLite-backed diagram: save to workspace database.
+        await wsSaveDiagram(w, inner);
+        store.clearDirty();
+        refreshTabStrip();
+        if (workspacePanelEl) renderWorkspaceView();
+        appendStatus(`Saved diagram "${inner.label}"`);
+        return true;
+      }
+      // Legacy file-based fallback.
+      let path = inner?.path || currentFilePath;
+      if (!path) {
+        path = await bridge.saveFileDialog("Save diagram", "schema.diagram", "Diagram", "*.diagram");
+        if (!path) return false;
+        if (inner) inner.path = path;
+        currentFilePath = path;
+      }
+      await bridge.saveFile(path, JSON.stringify(store.getDiagram()));
+      store.clearDirty();
+      refreshTabStrip();
+      if (workspacePanelEl) renderWorkspaceView();
+      appendStatus(`Saved ${path}`);
+      return true;
+    } else if (doc?.type === "diagram") {
+      // Standalone diagram (legacy).
+      let path = (doc as DiagramDoc).path || currentFilePath;
+      if (!path) {
+        path = await bridge.saveFileDialog("Save diagram", "schema.diagram", "Diagram", "*.diagram");
+        if (!path) return false;
+        currentFilePath = path;
+      }
+      await bridge.saveFile(path, JSON.stringify(store.getDiagram()));
+      store.clearDirty();
       (doc as DiagramDoc).path = path;
       (doc as DiagramDoc).label = path.split(/[/\\]/).pop() ?? "Untitled";
       addRecent({
@@ -949,12 +973,10 @@ async function saveDiagram(): Promise<boolean> {
         lastOpened: Date.now(),
       });
       refreshTabStrip();
-    } else if (doc && doc.type === "workspace") {
-      refreshTabStrip();
-      if (workspacePanelEl) renderWorkspaceView();
+      appendStatus(`Saved ${path}`);
+      return true;
     }
-    appendStatus(`Saved ${path}`);
-    return true;
+    return false;
   } catch (e) {
     showToast("Save failed: " + (e as Error).message);
     return false;
@@ -1023,7 +1045,9 @@ async function saveDiagramAs(): Promise<boolean> {
   }
 }
 
-function confirmUnsavedChanges(): Promise<"save" | "discard" | "cancel"> {
+function confirmUnsavedChanges(
+  message = "Save changes before creating a new diagram?"
+): Promise<"save" | "discard" | "cancel"> {
   return new Promise((resolve) => {
     const existing = document.querySelector(".modal-overlay");
     if (existing) existing.remove();
@@ -1032,7 +1056,7 @@ function confirmUnsavedChanges(): Promise<"save" | "discard" | "cancel"> {
     const panel = document.createElement("div");
     panel.className = "modal-panel modal-panel-unsaved";
     const p = document.createElement("p");
-    p.textContent = "Save changes before creating a new diagram?";
+    p.textContent = message;
     p.style.margin = "0 0 1rem 0";
     panel.appendChild(p);
     const btnDiv = document.createElement("div");
@@ -1064,6 +1088,73 @@ function confirmUnsavedChanges(): Promise<"save" | "discard" | "cancel"> {
     overlay.appendChild(panel);
     document.body.appendChild(overlay);
   });
+}
+
+/**
+ * Exit the application, prompting to save any diagrams with unsaved changes.
+ * If the user cancels at any prompt the exit is aborted.
+ */
+async function exitApp(): Promise<void> {
+  // Helper: prompt-and-save dirty inner diagram tabs in a workspace.
+  async function saveWorkspaceDirtyTabs(w: WorkspaceDoc): Promise<boolean> {
+    for (const inner of w.innerDiagramTabs) {
+      if (!inner.store.isDirty()) continue;
+      const choice = await confirmUnsavedChanges(
+        `Save changes to "${inner.label}" in workspace "${w.name || w.label}" before exiting?`
+      );
+      if (choice === "cancel") return false;
+      if (choice === "save") {
+        await syncDiagramRelationshipsToCatalog(w, inner.store.getDiagram());
+        if (inner.diagramId) {
+          await wsSaveDiagram(w, inner);
+        } else if (inner.path) {
+          await bridge.saveFile(
+            inner.path,
+            JSON.stringify(inner.store.getDiagram())
+          );
+        }
+        inner.store.clearDirty();
+      }
+    }
+    return true;
+  }
+
+  // 1. Handle the currentWorkspace (set when a workspace is the full-app focus).
+  if (currentWorkspace) {
+    if (!(await saveWorkspaceDirtyTabs(currentWorkspace))) return;
+  }
+
+  // 2. Handle standalone diagram tabs and any workspace docs in the documents array.
+  for (const doc of documents) {
+    if (doc.type === "diagram") {
+      if (doc.store.isDirty()) {
+        const choice = await confirmUnsavedChanges(
+          `Save changes to "${doc.label}" before exiting?`
+        );
+        if (choice === "cancel") return;
+        if (choice === "save") {
+          let path = doc.path;
+          if (!path) {
+            path = await bridge.saveFileDialog(
+              "Save diagram",
+              "schema.diagram",
+              "Diagram",
+              "*.diagram"
+            );
+            if (!path) return; // user cancelled file dialog
+            doc.path = path;
+          }
+          await bridge.saveFile(path, JSON.stringify(doc.store.getDiagram()));
+          doc.store.clearDirty();
+        }
+      }
+    } else if (doc.type === "workspace") {
+      // Workspace docs can also appear in the documents array in some flows.
+      if (!(await saveWorkspaceDirtyTabs(doc as WorkspaceDoc))) return;
+    }
+  }
+
+  bridge.quit();
 }
 
 async function openDiagramFile(): Promise<void> {
@@ -1191,7 +1282,9 @@ function setupToolbar(): void {
             autoSaveTimeoutId = null;
             syncDiagramRelationshipsToCatalog(w, store.getDiagram())
               .then(() =>
-                bridge.saveFile(inner.path, JSON.stringify(store.getDiagram()))
+                inner.diagramId
+                  ? wsSaveDiagram(w, inner)
+                  : bridge.saveFile(inner.path, JSON.stringify(store.getDiagram()))
               )
               .then(() => {
                 store.clearDirty();
@@ -1900,14 +1993,29 @@ async function openDatabaseConnectionDialog(): Promise<void> {
   profileRow.appendChild(profileSelect);
   connectionPage.appendChild(profileRow);
 
-  // Load saved profiles
+  // Load saved profiles (workspace-scoped + global).
+  const wsDoc = currentWorkspace;
   try {
+    // Workspace-scoped profiles first.
+    if (wsDoc?.workspaceId) {
+      try {
+        const wsProfilesJSON = await bridge.getWorkspaceConnectionProfiles(wsDoc.workspaceId);
+        const wsProfiles = JSON.parse(wsProfilesJSON) as import("./types").WsConnectionProfile[];
+        for (const p of wsProfiles) {
+          const opt = document.createElement("option");
+          opt.value = "ws:" + p.id;
+          opt.textContent = p.name + " (workspace)";
+          profileSelect.appendChild(opt);
+        }
+      } catch (_) { /* ignore */ }
+    }
+    // Global profiles.
     const profilesJSON = await bridge.listConnectionProfiles();
     const profiles = JSON.parse(profilesJSON) as string[];
     for (const p of profiles) {
       const opt = document.createElement("option");
-      opt.value = p;
-      opt.textContent = p;
+      opt.value = "global:" + p;
+      opt.textContent = p + " (global)";
       profileSelect.appendChild(opt);
     }
   } catch (_) {
@@ -2184,22 +2292,51 @@ async function openDatabaseConnectionDialog(): Promise<void> {
     portInput.value = String(DRIVER_DEFAULT_PORTS[driverSelect.value] || 0);
   });
 
-  // Profile load handler
+  // Profile load handler (supports both workspace: and global: prefixed values).
   profileSelect.addEventListener("change", async () => {
-    if (!profileSelect.value) return;
+    const val = profileSelect.value;
+    if (!val) return;
     try {
-      const json = await bridge.loadConnectionProfile(profileSelect.value);
-      const loaded = JSON.parse(json) as DbConnectionConfig;
+      let loaded: DbConnectionConfig;
+      let profileKey = val; // key for password lookup
+      if (val.startsWith("ws:")) {
+        // Workspace-scoped profile -- load from SQLite.
+        const profileId = val.slice(3);
+        profileKey = (wsDoc?.workspaceId ?? "") + ":" + profileId;
+        const wsProfilesJSON = await bridge.getWorkspaceConnectionProfiles(wsDoc!.workspaceId);
+        const wsProfiles = JSON.parse(wsProfilesJSON) as import("./types").WsConnectionProfile[];
+        const wp = wsProfiles.find(p => p.id === profileId);
+        if (!wp) throw new Error("Profile not found");
+        loaded = {
+          driver: wp.driver,
+          host: wp.host || "",
+          port: wp.port || 0,
+          database: wp.databaseName || "",
+          username: wp.username || "",
+          password: "",
+          sslMode: wp.sslMode || "",
+          project: wp.project || "",
+          dataset: wp.dataset || "",
+          credentialsFile: wp.credentialsFile || "",
+          bigqueryAuthMode: wp.bigqueryAuthMode || "service_account",
+        };
+      } else {
+        // Global profile.
+        const globalName = val.startsWith("global:") ? val.slice(7) : val;
+        profileKey = globalName;
+        const json = await bridge.loadConnectionProfile(globalName);
+        loaded = JSON.parse(json) as DbConnectionConfig;
+      }
       driverSelect.value = loaded.driver;
       driverSelect.dispatchEvent(new Event("change"));
       hostInput.value = loaded.host || "";
       portInput.value = String(loaded.port || DRIVER_DEFAULT_PORTS[loaded.driver] || 0);
       dbInput.value = loaded.database || "";
       userInput.value = loaded.username || "";
-      // Try to load password from OS keyring
+      // Try to load password from OS keyring.
       passInput.value = "";
       try {
-        const pw = await bridge.loadProfilePassword(profileSelect.value);
+        const pw = await bridge.loadProfilePassword(profileKey);
         if (pw) passInput.value = pw;
       } catch (_) {
         // No saved password in keyring
@@ -2394,16 +2531,43 @@ async function openDatabaseConnectionDialog(): Promise<void> {
       // Don't persist sensitive OAuth tokens in the profile file
       cfgToSave.oauthRefreshToken = "";
       cfgToSave.oauthClientSecret = "";
+
+      // Save to workspace SQLite if a workspace is open.
+      let passwordKey = name;
+      if (wsDoc?.workspaceId) {
+        const profileId = "cp-" + Math.random().toString(36).slice(2, 11);
+        const wsProfile: import("./types").WsConnectionProfile = {
+          id: profileId,
+          name,
+          driver: cfgToSave.driver,
+          host: cfgToSave.host,
+          port: cfgToSave.port || undefined,
+          databaseName: cfgToSave.database,
+          username: cfgToSave.username,
+          sslMode: cfgToSave.sslMode,
+          project: cfgToSave.project,
+          dataset: cfgToSave.dataset,
+          credentialsFile: cfgToSave.credentialsFile,
+          bigqueryAuthMode: cfgToSave.bigqueryAuthMode,
+        };
+        await bridge.saveWorkspaceConnectionProfile(wsDoc.workspaceId, JSON.stringify(wsProfile));
+        passwordKey = wsDoc.workspaceId + ":" + profileId;
+      }
+      // Also save to global profile library.
       await bridge.saveConnectionProfile(name, JSON.stringify(cfgToSave));
-      // Save password to OS keyring if non-empty
+      // Save password to OS keyring if non-empty.
       if (password) {
         try {
-          await bridge.saveProfilePassword(name, password);
+          await bridge.saveProfilePassword(passwordKey, password);
+          // Also save under the global name for global profile usage.
+          if (passwordKey !== name) {
+            await bridge.saveProfilePassword(name, password);
+          }
         } catch (_) {
           appendStatus("Could not save password to OS credential manager", "error");
         }
       }
-      // Persist OAuth client config globally for reuse across profiles
+      // Persist OAuth client config globally for reuse across profiles.
       if (cfgToSave.oauthClientId) {
         try {
           await bridge.saveOAuthClientConfig(
@@ -2413,12 +2577,14 @@ async function openDatabaseConnectionDialog(): Promise<void> {
         } catch (_) { /* non-fatal */ }
       }
       showToast("Profile saved");
-      // Add to dropdown if not already present
+      // Add to dropdown if not already present.
+      const displayName = wsDoc?.workspaceId ? name + " (workspace)" : name + " (global)";
+      const optValue = wsDoc?.workspaceId ? "ws:" + name : "global:" + name;
       const opts = Array.from(profileSelect.options).map((o) => o.value);
-      if (!opts.includes(name)) {
+      if (!opts.includes(optValue)) {
         const opt = document.createElement("option");
-        opt.value = name;
-        opt.textContent = name;
+        opt.value = optValue;
+        opt.textContent = displayName;
         profileSelect.appendChild(opt);
       }
     } catch (e) {
@@ -2486,7 +2652,7 @@ async function openDatabaseConnectionDialog(): Promise<void> {
             })),
           });
         }
-        await saveTableCatalog(w.rootPath, w.catalogTables);
+        await wsSaveFullCatalog(w);
         bindActiveTab();
         refreshTabStrip();
         updateEditorContentVisibility();
@@ -2578,7 +2744,7 @@ async function openAndImportSQL(): Promise<void> {
           })),
         });
       }
-      await saveTableCatalog(w.rootPath, w.catalogTables);
+      await wsSaveFullCatalog(w);
       bindActiveTab();
       refreshTabStrip();
       updateEditorContentVisibility();
@@ -2643,7 +2809,7 @@ async function openAndImportCSV(): Promise<void> {
           })),
         });
       }
-      await saveTableCatalog(w.rootPath, w.catalogTables);
+      await wsSaveFullCatalog(w);
       bindActiveTab();
       refreshTabStrip();
       updateEditorContentVisibility();
@@ -3964,9 +4130,9 @@ function showTableEditor(tableId: string): void {
           catalogChanged = true;
         }
       }
-      await saveTableCatalog(w.rootPath, w.catalogTables);
+      await wsSaveFullCatalog(w);
       if (catalogChanged)
-        await saveCatalogRelationships(w.rootPath, w.catalogRelationships);
+        await wsSaveAllCatalogRelationships(w);
       showToast("Synced to catalog");
     };
     footerDiv.appendChild(syncBtn);
@@ -4320,7 +4486,7 @@ function showCatalogTableEditor(w: WorkspaceDoc, catalogId: string): void {
         const idx = w.catalogRelationships.findIndex((r) => r.id === catRel.id);
         if (idx >= 0) {
           w.catalogRelationships.splice(idx, 1);
-          saveCatalogRelationships(w.rootPath, w.catalogRelationships).then(
+          wsSaveAllCatalogRelationships(w).then(
             () => renderCatalogRelationships()
           );
         }
@@ -4360,7 +4526,7 @@ function showCatalogTableEditor(w: WorkspaceDoc, catalogId: string): void {
           catRel.sourceFieldName = newTgtName;
           catRel.targetFieldName = newSrcName;
         }
-        saveCatalogRelationships(w.rootPath, w.catalogRelationships).then(
+        wsSaveAllCatalogRelationships(w).then(
           () => {}
         );
       };
@@ -4388,7 +4554,7 @@ function showCatalogTableEditor(w: WorkspaceDoc, catalogId: string): void {
           catRel.sourceFieldName = newTgtName;
           catRel.targetFieldName = newSrcName;
         }
-        saveCatalogRelationships(w.rootPath, w.catalogRelationships).then(
+        wsSaveAllCatalogRelationships(w).then(
           () => {}
         );
       };
@@ -4403,7 +4569,7 @@ function showCatalogTableEditor(w: WorkspaceDoc, catalogId: string): void {
         const idx = w.catalogRelationships.findIndex((r) => r.id === catRel.id);
         if (idx >= 0) {
           w.catalogRelationships.splice(idx, 1);
-          saveCatalogRelationships(w.rootPath, w.catalogRelationships).then(
+          wsSaveAllCatalogRelationships(w).then(
             () => renderCatalogRelationships()
           );
         }
@@ -4478,7 +4644,7 @@ function showCatalogTableEditor(w: WorkspaceDoc, catalogId: string): void {
         targetFieldName: weAreSource ? theirFieldName : ourFieldName,
       };
       w.catalogRelationships.push(newRel);
-      saveCatalogRelationships(w.rootPath, w.catalogRelationships).then(() =>
+      wsSaveAllCatalogRelationships(w).then(() =>
         renderCatalogRelationships()
       );
     };
@@ -4511,83 +4677,100 @@ function showCatalogTableEditor(w: WorkspaceDoc, catalogId: string): void {
     }));
     catalogEntry.name = name;
     catalogEntry.fields = fields;
-    await saveTableCatalog(w.rootPath, w.catalogTables);
-    const openPaths = new Set(w.innerDiagramTabs.map((t) => t.path));
-    for (const tab of w.innerDiagramTabs) {
-      const d = tab.store.getDiagram();
-      const table = d.tables.find((t) => t.catalogTableId === catalogId);
-      if (!table) continue;
-      const fieldsForDiagram = fields.map((cf, i) => ({
-        id: table.fields[i]?.id ?? nextFieldId(),
-        name: cf.name,
-        type: cf.type,
-        nullable: cf.nullable,
-        primaryKey: cf.primaryKey,
-        length: cf.length,
-        precision: cf.precision,
-        scale: cf.scale,
-        typeOverrides: cf.typeOverrides,
-      }));
-      tab.store.replaceTableContent(table.id, name, fieldsForDiagram);
-      await syncDiagramRelationshipsToCatalog(w, tab.store.getDiagram());
-      await bridge.saveFile(tab.path, JSON.stringify(tab.store.getDiagram()));
-      tab.store.clearDirty();
-    }
-    if (bridge.isBackendAvailable()) {
-      try {
-        const files = await loadWorkspaceDiagramFiles(w);
-        for (const filename of files) {
-          const fullPath = pathJoin(w.rootPath, filename);
-          if (openPaths.has(fullPath)) continue;
-          try {
-            const raw = await bridge.loadFile(fullPath);
-            const d = JSON.parse(raw) as Diagram;
-            const table = d.tables?.find((t) => t.catalogTableId === catalogId);
-            if (!table) continue;
-            table.name = name;
-            const newFields = fields.map((cf, i) => ({
-              id: table.fields[i]?.id ?? nextFieldId(),
-              name: cf.name,
-              type: cf.type.trim().toLowerCase() || "string",
-              nullable: cf.nullable ?? false,
-              primaryKey: cf.primaryKey ?? false,
-              length: cf.length,
-              precision: cf.precision,
-              scale: cf.scale,
-              typeOverrides: cf.typeOverrides,
-            }));
-            table.fields = newFields;
-            const keptIds = new Set(newFields.map((f) => f.id));
-            if (d.relationships) {
-              d.relationships = d.relationships.filter(
-                (r) =>
-                  !(
-                    r.sourceTableId === table.id &&
-                    !keptIds.has(r.sourceFieldId)
-                  ) &&
-                  !(
-                    r.targetTableId === table.id &&
-                    !keptIds.has(r.targetFieldId)
-                  )
-              );
-            }
-            await bridge.saveFile(fullPath, JSON.stringify(d));
-          } catch {
-            // skip unreadable or unwritable file
+    try {
+      await wsSaveFullCatalog(w);
+      const openPaths = new Set(w.innerDiagramTabs.filter((t) => t.path).map((t) => t.path));
+      for (const tab of w.innerDiagramTabs) {
+        const d = tab.store.getDiagram();
+        const table = d.tables.find((t) => t.catalogTableId === catalogId);
+        if (!table) continue;
+        const fieldsForDiagram = fields.map((cf, i) => ({
+          id: table.fields[i]?.id ?? nextFieldId(),
+          name: cf.name,
+          type: cf.type,
+          nullable: cf.nullable,
+          primaryKey: cf.primaryKey,
+          length: cf.length,
+          precision: cf.precision,
+          scale: cf.scale,
+          typeOverrides: cf.typeOverrides,
+        }));
+        tab.store.replaceTableContent(table.id, name, fieldsForDiagram);
+        await syncDiagramRelationshipsToCatalog(w, tab.store.getDiagram());
+        try {
+          if (tab.diagramId) {
+            // SQLite-backed diagram: save via workspace repository.
+            await wsSaveDiagram(w, tab);
+          } else if (tab.path) {
+            // Legacy file-based diagram: save to disk.
+            await bridge.saveFile(tab.path, JSON.stringify(tab.store.getDiagram()));
           }
+        } catch {
+          // continue updating other tabs even if one save fails
         }
-      } catch {
-        // fallback: open tabs already updated above
+        tab.store.clearDirty();
       }
+      // For legacy file-based workspaces, also update non-open .diagram files on disk.
+      if (w.rootPath && bridge.isBackendAvailable()) {
+        try {
+          const files = await loadWorkspaceDiagramFiles(w);
+          for (const filename of files) {
+            const fullPath = pathJoin(w.rootPath, filename);
+            if (openPaths.has(fullPath)) continue;
+            try {
+              const raw = await bridge.loadFile(fullPath);
+              const d = JSON.parse(raw) as Diagram;
+              const table = d.tables?.find((t) => t.catalogTableId === catalogId);
+              if (!table) continue;
+              table.name = name;
+              const newFields = fields.map((cf, i) => ({
+                id: table.fields[i]?.id ?? nextFieldId(),
+                name: cf.name,
+                type: cf.type.trim().toLowerCase() || "string",
+                nullable: cf.nullable ?? false,
+                primaryKey: cf.primaryKey ?? false,
+                length: cf.length,
+                precision: cf.precision,
+                scale: cf.scale,
+                typeOverrides: cf.typeOverrides,
+              }));
+              table.fields = newFields;
+              const keptIds = new Set(newFields.map((f) => f.id));
+              if (d.relationships) {
+                d.relationships = d.relationships.filter(
+                  (r) =>
+                    !(
+                      r.sourceTableId === table.id &&
+                      !keptIds.has(r.sourceFieldId)
+                    ) &&
+                    !(
+                      r.targetTableId === table.id &&
+                      !keptIds.has(r.targetFieldId)
+                    )
+                );
+              }
+              await bridge.saveFile(fullPath, JSON.stringify(d));
+            } catch {
+              // skip unreadable or unwritable file
+            }
+          }
+        } catch {
+          // fallback: open tabs already updated above
+        }
+      }
+      showToast("Table definition updated");
+    } catch (err) {
+      console.error("Catalog table editor save failed:", err);
+      showToast("Error saving table");
+    } finally {
+      overlay.remove();
+      bindActiveTab();
+      refreshTabStrip();
+      updateEditorContentVisibility();
+      renderWorkspaceView();
+      const inner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
+      if (inner) render();
     }
-    overlay.remove();
-    bindActiveTab();
-    refreshTabStrip();
-    updateEditorContentVisibility();
-    renderWorkspaceView();
-    const inner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
-    if (inner) render();
-    showToast("Table definition updated");
   };
   const cancelBtn = document.createElement("button");
   cancelBtn.type = "button";
@@ -5129,18 +5312,8 @@ function showLanding(): void {
   openWorkspaceBtn.className = "landing-btn";
   openWorkspaceBtn.textContent = "Open Workspace";
   openWorkspaceBtn.onclick = () => openWorkspaceTab();
-  const newDiagramBtn = document.createElement("button");
-  newDiagramBtn.className = "landing-btn";
-  newDiagramBtn.textContent = "New Diagram";
-  newDiagramBtn.onclick = () => newDiagramTab();
-  const openDiagramBtn = document.createElement("button");
-  openDiagramBtn.className = "landing-btn";
-  openDiagramBtn.textContent = "Open Diagram";
-  openDiagramBtn.onclick = () => openDiagramTab();
   startButtons.appendChild(newWorkspaceBtn);
   startButtons.appendChild(openWorkspaceBtn);
-  startButtons.appendChild(newDiagramBtn);
-  startButtons.appendChild(openDiagramBtn);
   startSection.appendChild(startButtons);
   wrap.appendChild(startSection);
 
@@ -5176,10 +5349,13 @@ function showLanding(): void {
 }
 
 async function openRecentEntry(entry: RecentEntry): Promise<void> {
-  if (entry.kind === "diagram") {
-    await openDiagramTab(entry.path);
-  } else if (entry.kind === "workspace") {
+  // All entries are workspaces in the new model; legacy diagram entries open
+  // as workspaces if the path ends with .schemastudio.
+  if (entry.kind === "workspace" || entry.path.endsWith(".schemastudio")) {
     await openWorkspaceTab(entry.path);
+  } else if (entry.kind === "diagram") {
+    // Legacy standalone diagram - still supported for backward compat.
+    await openDiagramTab(entry.path);
   }
 }
 
@@ -5187,6 +5363,10 @@ function pathJoin(root: string, file: string): string {
   const sep = root.includes("\\") ? "\\" : "/";
   return root.endsWith(sep) ? root + file : root + sep + file;
 }
+
+// ---------------------------------------------------------------------------
+// Legacy file-based persistence (kept for migration tool)
+// ---------------------------------------------------------------------------
 
 async function loadWorkspaceConfig(rootPath: string): Promise<WorkspaceConfig> {
   const raw = await bridge.loadFile(pathJoin(rootPath, WORKSPACE_CONFIG_FILE));
@@ -5201,26 +5381,6 @@ async function loadTableCatalog(rootPath: string): Promise<CatalogTable[]> {
   } catch {
     return [];
   }
-}
-
-async function saveWorkspaceConfig(
-  rootPath: string,
-  config: WorkspaceConfig
-): Promise<void> {
-  await bridge.saveFile(
-    pathJoin(rootPath, WORKSPACE_CONFIG_FILE),
-    JSON.stringify(config, null, 2)
-  );
-}
-
-async function saveTableCatalog(
-  rootPath: string,
-  tables: CatalogTable[]
-): Promise<void> {
-  await bridge.saveFile(
-    pathJoin(rootPath, TABLE_CATALOG_FILE),
-    JSON.stringify(tables, null, 2)
-  );
 }
 
 async function loadCatalogRelationships(
@@ -5238,17 +5398,6 @@ async function loadCatalogRelationships(
   }
 }
 
-async function saveCatalogRelationships(
-  rootPath: string,
-  relationships: CatalogRelationship[]
-): Promise<void> {
-  if (!bridge.isBackendAvailable()) return;
-  await bridge.saveFile(
-    pathJoin(rootPath, CATALOG_RELATIONSHIPS_FILE),
-    JSON.stringify(relationships, null, 2)
-  );
-}
-
 async function loadWorkspaceUIState(
   rootPath: string
 ): Promise<WorkspaceUIState> {
@@ -5261,19 +5410,188 @@ async function loadWorkspaceUIState(
   }
 }
 
-async function saveWorkspaceUIState(
-  rootPath: string,
-  state: WorkspaceUIState
-): Promise<void> {
+// ---------------------------------------------------------------------------
+// New SQLite-backed workspace persistence
+// ---------------------------------------------------------------------------
+
+/** Save workspace settings to the SQLite database. */
+async function wsSaveSettings(w: WorkspaceDoc): Promise<void> {
+  if (!bridge.isBackendAvailable()) return;
+  const settings: import("./types").WsSettings = {
+    name: w.name,
+    description: w.description,
+    autoSaveDiagrams: w.autoSaveDiagrams,
+  };
+  await bridge.saveWorkspaceSettings(w.workspaceId, JSON.stringify(settings));
+}
+
+/** Save a single catalog table (with fields and type overrides) to the workspace SQLite database. */
+async function wsSaveCatalogTable(w: WorkspaceDoc, table: CatalogTable): Promise<void> {
+  if (!bridge.isBackendAvailable()) return;
+  // Convert the frontend CatalogTable to the SQLite-backed format.
+  const wsFields = table.fields.map((f, i) => ({
+    id: f.id,
+    tableId: table.id,
+    name: f.name,
+    type: f.type,
+    nullable: f.nullable ?? false,
+    primaryKey: f.primaryKey ?? false,
+    length: f.length,
+    precision: f.precision,
+    scale: f.scale,
+    sortOrder: i,
+    typeOverrides: f.typeOverrides
+      ? Object.entries(f.typeOverrides).map(([dialect, ov]) => ({
+          fieldId: f.id,
+          dialect,
+          typeOverride: ov.type,
+        }))
+      : [],
+  }));
+  const wsTable = {
+    id: table.id,
+    name: table.name,
+    sortOrder: 0,
+    fields: wsFields,
+  };
+  await bridge.saveCatalogTable(w.workspaceId, JSON.stringify(wsTable));
+}
+
+/** Delete a catalog table from the workspace SQLite database. */
+async function wsDeleteCatalogTable(w: WorkspaceDoc, tableId: string): Promise<void> {
+  if (!bridge.isBackendAvailable()) return;
+  await bridge.deleteCatalogTable(w.workspaceId, tableId);
+}
+
+/** Save the full catalog (all tables) to the workspace SQLite database. */
+async function wsSaveFullCatalog(w: WorkspaceDoc): Promise<void> {
+  if (!bridge.isBackendAvailable()) return;
+  for (const table of w.catalogTables) {
+    await wsSaveCatalogTable(w, table);
+  }
+}
+
+/** Save a single catalog relationship to the workspace SQLite database. */
+async function wsSaveCatalogRelationship(w: WorkspaceDoc, rel: CatalogRelationship): Promise<void> {
+  if (!bridge.isBackendAvailable()) return;
+  // Convert the frontend CatalogRelationship to the SQLite-backed format.
+  const wsRel = {
+    id: rel.id,
+    sourceTableId: rel.sourceCatalogTableId,
+    targetTableId: rel.targetCatalogTableId,
+    name: "",
+    note: "",
+    cardinality: "",
+    fields: [] as { relationshipId: string; sourceFieldId: string; targetFieldId: string; sortOrder: number }[],
+  };
+  // Attempt to resolve field names to IDs for the relationship fields mapping.
+  const srcTable = w.catalogTables.find(t => t.id === rel.sourceCatalogTableId);
+  const tgtTable = w.catalogTables.find(t => t.id === rel.targetCatalogTableId);
+  if (srcTable && tgtTable) {
+    const srcField = srcTable.fields.find(f => f.name === rel.sourceFieldName);
+    const tgtField = tgtTable.fields.find(f => f.name === rel.targetFieldName);
+    if (srcField && tgtField) {
+      wsRel.fields = [{
+        relationshipId: rel.id,
+        sourceFieldId: srcField.id,
+        targetFieldId: tgtField.id,
+        sortOrder: 0,
+      }];
+    }
+  }
+  await bridge.saveCatalogRelationship(w.workspaceId, JSON.stringify(wsRel));
+}
+
+/** Save all catalog relationships to the workspace SQLite database. */
+async function wsSaveAllCatalogRelationships(w: WorkspaceDoc): Promise<void> {
+  if (!bridge.isBackendAvailable()) return;
+  for (const rel of w.catalogRelationships) {
+    await wsSaveCatalogRelationship(w, rel);
+  }
+}
+
+/** Save workspace UI state to the SQLite database. */
+async function wsSaveUIState(w: WorkspaceDoc): Promise<void> {
   if (!bridge.isBackendAvailable()) return;
   try {
-    await bridge.saveFile(
-      pathJoin(rootPath, WORKSPACE_STATE_FILE),
-      JSON.stringify(state, null, 2)
-    );
+    const state = w.workspaceUIState ?? {};
+    const kvState: Record<string, string> = {};
+    if (state.catalogOpen !== undefined) kvState["catalogOpen"] = String(state.catalogOpen);
+    if (state.diagramsOpen !== undefined) kvState["diagramsOpen"] = String(state.diagramsOpen);
+    if (state.settingsOpen !== undefined) kvState["settingsOpen"] = String(state.settingsOpen);
+    if (state.sidebarScrollTop !== undefined) kvState["sidebarScrollTop"] = String(state.sidebarScrollTop);
+    if (state.catalogContentScrollTop !== undefined) kvState["catalogContentScrollTop"] = String(state.catalogContentScrollTop);
+    if (state.diagramsContentScrollTop !== undefined) kvState["diagramsContentScrollTop"] = String(state.diagramsContentScrollTop);
+    await bridge.saveUIState(w.workspaceId, JSON.stringify(kvState));
   } catch {
     // ignore
   }
+}
+
+/** Convert a backend UI state key-value map to our WorkspaceUIState. */
+function parseUIState(kv: Record<string, string>): WorkspaceUIState {
+  return {
+    catalogOpen: kv["catalogOpen"] === "true",
+    diagramsOpen: kv["diagramsOpen"] !== "false", // default true
+    settingsOpen: kv["settingsOpen"] === "true",
+    sidebarScrollTop: kv["sidebarScrollTop"] ? Number(kv["sidebarScrollTop"]) : undefined,
+    catalogContentScrollTop: kv["catalogContentScrollTop"] ? Number(kv["catalogContentScrollTop"]) : undefined,
+    diagramsContentScrollTop: kv["diagramsContentScrollTop"] ? Number(kv["diagramsContentScrollTop"]) : undefined,
+  };
+}
+
+/** Convert a backend WsCatalogTable[] to our frontend CatalogTable[] format. */
+function wsTablesToCatalog(wsTables: import("./types").WsCatalogTable[]): CatalogTable[] {
+  return wsTables.map(wt => ({
+    id: wt.id,
+    name: wt.name,
+    fields: (wt.fields || []).map(wf => {
+      const overrides: Record<string, import("./types").FieldTypeOverride> = {};
+      for (const o of wf.typeOverrides || []) {
+        overrides[o.dialect] = { type: o.typeOverride };
+      }
+      return {
+        id: wf.id,
+        name: wf.name,
+        type: wf.type,
+        nullable: wf.nullable,
+        primaryKey: wf.primaryKey,
+        length: wf.length,
+        precision: wf.precision,
+        scale: wf.scale,
+        typeOverrides: Object.keys(overrides).length > 0 ? overrides : undefined,
+      };
+    }),
+  }));
+}
+
+/** Convert a backend WsCatalogRelationship[] to our frontend CatalogRelationship[] format. */
+function wsRelsToCatalog(
+  wsRels: import("./types").WsCatalogRelationship[],
+  catalogTables: CatalogTable[]
+): CatalogRelationship[] {
+  return wsRels.map(wr => {
+    // Try to resolve field IDs back to field names.
+    let sourceFieldName = "";
+    let targetFieldName = "";
+    if (wr.fields && wr.fields.length > 0) {
+      const srcTable = catalogTables.find(t => t.id === wr.sourceTableId);
+      const tgtTable = catalogTables.find(t => t.id === wr.targetTableId);
+      if (srcTable && tgtTable) {
+        const srcField = srcTable.fields.find(f => f.id === wr.fields![0].sourceFieldId);
+        const tgtField = tgtTable.fields.find(f => f.id === wr.fields![0].targetFieldId);
+        sourceFieldName = srcField?.name ?? "";
+        targetFieldName = tgtField?.name ?? "";
+      }
+    }
+    return {
+      id: wr.id,
+      sourceCatalogTableId: wr.sourceTableId,
+      targetCatalogTableId: wr.targetTableId,
+      sourceFieldName,
+      targetFieldName,
+    };
+  });
 }
 
 async function newWorkspaceTab(): Promise<void> {
@@ -5282,31 +5600,36 @@ async function newWorkspaceTab(): Promise<void> {
     return;
   }
   try {
-    const rootPath = await bridge.openDirectoryDialog(
-      "Choose workspace folder"
+    const filePath = await bridge.saveFileDialog(
+      "Create workspace",
+      "workspace.schemastudio",
+      "Schema Studio Workspace",
+      SCHEMASTUDIO_EXT
     );
-    if (!rootPath) return;
-    const config: WorkspaceConfig = {
-      name: "New Workspace",
+    if (!filePath) return;
+    const resultJSON = await bridge.createWorkspace(filePath);
+    const result = JSON.parse(resultJSON) as import("./types").CreateWorkspaceResult;
+    const label = filePath.split(/[/\\]/).filter(Boolean).pop()?.replace(/\.schemastudio$/i, "") ?? "Workspace";
+    // Set the default workspace name.
+    await bridge.saveWorkspaceSettings(result.workspaceId, JSON.stringify({
+      name: label,
       description: "",
       autoSaveDiagrams: false,
-    };
-    await saveWorkspaceConfig(rootPath, config);
-    await saveTableCatalog(rootPath, []);
-    const label = rootPath.split(/[/\\]/).filter(Boolean).pop() ?? "Workspace";
-    await saveCatalogRelationships(rootPath, []);
+    }));
     const doc: WorkspaceDoc = {
       type: "workspace",
       id: nextDocId(),
+      workspaceId: result.workspaceId,
       label,
-      rootPath,
-      name: config.name,
-      description: config.description,
+      filePath,
+      rootPath: filePath, // for legacy compat
+      name: label,
+      description: "",
       catalogTables: [],
       catalogRelationships: [],
       innerDiagramTabs: [],
       activeInnerDiagramIndex: -1,
-      autoSaveDiagrams: config.autoSaveDiagrams ?? false,
+      autoSaveDiagrams: false,
       workspaceUIState: {
         catalogOpen: true,
         diagramsOpen: true,
@@ -5315,13 +5638,13 @@ async function newWorkspaceTab(): Promise<void> {
     };
     currentWorkspace = doc;
     addRecent({
-      path: rootPath,
+      path: filePath,
       kind: "workspace",
       label,
       lastOpened: Date.now(),
     });
     showWorkspaceView();
-    appendStatus(`Created workspace ${rootPath}`);
+    appendStatus(`Created workspace ${filePath}`);
     showToast("Workspace created");
   } catch (e) {
     showToast("Failed: " + (e as Error).message);
@@ -5329,51 +5652,58 @@ async function newWorkspaceTab(): Promise<void> {
 }
 
 async function openWorkspaceTab(path?: string): Promise<void> {
-  let rootPath = path;
-  if (rootPath === undefined) {
+  let filePath = path;
+  if (filePath === undefined) {
     if (!bridge.isBackendAvailable()) {
       showToast("Backend not available (run in Wails)");
       return;
     }
     try {
-      rootPath = await bridge.openDirectoryDialog("Open workspace folder");
+      filePath = await bridge.openFileDialog(
+        "Open workspace",
+        "Schema Studio Workspace",
+        SCHEMASTUDIO_EXT
+      );
     } catch (e) {
       showToast("Open failed: " + (e as Error).message);
       return;
     }
-    if (!rootPath) return;
+    if (!filePath) return;
   }
   try {
-    const config = await loadWorkspaceConfig(rootPath);
-    const catalogTables = await loadTableCatalog(rootPath);
-    const catalogRelationships = await loadCatalogRelationships(rootPath);
-    const workspaceUIState = await loadWorkspaceUIState(rootPath);
+    const resultJSON = await bridge.openWorkspace(filePath);
+    const result = JSON.parse(resultJSON) as import("./types").OpenWorkspaceResult;
+    const catalogTables = wsTablesToCatalog(result.catalogTables);
+    const catalogRelationships = wsRelsToCatalog(result.catalogRelationships, catalogTables);
+    const workspaceUIState = parseUIState(result.uiState);
     const label =
-      config.name ||
-      (rootPath.split(/[/\\]/).filter(Boolean).pop() ?? "Workspace");
+      result.settings.name ||
+      (filePath.split(/[/\\]/).filter(Boolean).pop()?.replace(/\.schemastudio$/i, "") ?? "Workspace");
     const doc: WorkspaceDoc = {
       type: "workspace",
       id: nextDocId(),
+      workspaceId: result.workspaceId,
       label,
-      rootPath,
-      name: config.name,
-      description: config.description,
+      filePath,
+      rootPath: filePath, // for legacy compat
+      name: result.settings.name,
+      description: result.settings.description,
       catalogTables,
       catalogRelationships,
       innerDiagramTabs: [],
       activeInnerDiagramIndex: -1,
-      autoSaveDiagrams: config.autoSaveDiagrams ?? false,
+      autoSaveDiagrams: result.settings.autoSaveDiagrams ?? false,
       workspaceUIState,
     };
     currentWorkspace = doc;
     addRecent({
-      path: rootPath,
+      path: filePath,
       kind: "workspace",
       label,
       lastOpened: Date.now(),
     });
     showWorkspaceView();
-    appendStatus(`Opened workspace ${rootPath}`);
+    appendStatus(`Opened workspace ${filePath}`);
     showToast("Opened workspace");
   } catch (e) {
     showToast("Open failed: " + (e as Error).message);
@@ -5709,7 +6039,7 @@ function renderWorkspaceView(): void {
         (diagramsContentEl as HTMLElement)?.scrollTop ??
         prev.diagramsContentScrollTop,
     };
-    saveWorkspaceUIState(w.rootPath, w.workspaceUIState).catch(() => {});
+    wsSaveUIState(w).catch(() => {});
   }
 
   if (diagramPanelEl && workspacePanelEl.contains(diagramPanelEl)) {
@@ -5850,13 +6180,13 @@ function renderWorkspaceView(): void {
   diagramsContent.className = "workspace-accordion-content";
   const diagramsList = document.createElement("div");
   diagramsList.className = "workspace-diagrams-list";
-  loadWorkspaceDiagramFiles(w).then((files) => {
-    files.forEach((filename) => {
+  loadWorkspaceDiagramList(w).then((diagrams) => {
+    diagrams.forEach((diag) => {
       const row = document.createElement("div");
       row.className = "workspace-diagram-item";
       const label = document.createElement("span");
       label.className = "workspace-diagram-item-label";
-      label.textContent = filename;
+      label.textContent = diag.name;
       row.appendChild(label);
       const deleteBtn = document.createElement("button");
       deleteBtn.type = "button";
@@ -5865,21 +6195,21 @@ function renderWorkspaceView(): void {
       deleteBtn.innerHTML = TRASH_ICON_SVG;
       deleteBtn.onclick = (e) => {
         e.stopPropagation();
-        confirmDeleteDiagram(w, filename);
+        confirmDeleteDiagramById(w, diag.id, diag.name);
       };
       row.appendChild(deleteBtn);
       row.onclick = (e) => {
         if (!(e.target as Element).closest(".workspace-diagram-item-delete")) {
-          openWorkspaceDiagramFile(w, filename);
+          openWorkspaceDiagramById(w, diag.id, diag.name);
         }
       };
       row.addEventListener("contextmenu", (e) => {
         e.preventDefault();
-        showDiagramListContextMenu(e, w, filename);
+        showDiagramListContextMenu(e, w, diag.name);
       });
       diagramsList.appendChild(row);
     });
-    if (files.length === 0) {
+    if (diagrams.length === 0) {
       const empty = document.createElement("div");
       empty.className = "workspace-empty-msg";
       empty.textContent = "No diagram files";
@@ -5939,7 +6269,7 @@ function renderWorkspaceView(): void {
   saveSettingsBtn.type = "button";
   saveSettingsBtn.textContent = "Save";
   saveSettingsBtn.onclick = () =>
-    saveWorkspaceSettings(
+    saveWorkspaceSettingsFromModal(
       w,
       nameInput.value,
       descInput.value,
@@ -6032,7 +6362,7 @@ function renderWorkspaceView(): void {
       catalogContentScrollTop: catalogContent.scrollTop,
       diagramsContentScrollTop: diagramsContent.scrollTop,
     };
-    saveWorkspaceUIState(w.rootPath, w.workspaceUIState).catch(() => {});
+    wsSaveUIState(w).catch(() => {});
   };
 
   let sidebarScrollTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -6142,6 +6472,18 @@ async function renameWorkspaceDiagramFile(
   }
 }
 
+/** List diagram summaries from the workspace SQLite database. */
+async function loadWorkspaceDiagramList(w: WorkspaceDoc): Promise<import("./types").DiagramSummary[]> {
+  if (!bridge.isBackendAvailable()) return [];
+  try {
+    const raw = await bridge.listWorkspaceDiagrams(w.workspaceId);
+    return JSON.parse(raw) as import("./types").DiagramSummary[];
+  } catch {
+    return [];
+  }
+}
+
+/** Legacy: list .diagram files from the workspace folder (for migration). */
 async function loadWorkspaceDiagramFiles(w: WorkspaceDoc): Promise<string[]> {
   if (!bridge.isBackendAvailable()) return [];
   try {
@@ -6151,6 +6493,174 @@ async function loadWorkspaceDiagramFiles(w: WorkspaceDoc): Promise<string[]> {
   }
 }
 
+/** Open a diagram from the workspace SQLite database by its ID. */
+async function openWorkspaceDiagramById(
+  w: WorkspaceDoc,
+  diagramId: string,
+  diagramName: string
+): Promise<void> {
+  try {
+    // Check if already open.
+    const existing = w.innerDiagramTabs.find((t) => t.diagramId === diagramId);
+    if (existing) {
+      const idx = w.innerDiagramTabs.indexOf(existing);
+      w.activeInnerDiagramIndex = idx;
+      bindActiveTab();
+      refreshTabStrip();
+      updateEditorContentVisibility();
+      renderWorkspaceView();
+      return;
+    }
+
+    const raw = await bridge.getDiagram(w.workspaceId, diagramId);
+    const wsDiagram = JSON.parse(raw) as import("./types").WsDiagram;
+    // Convert WsDiagram to the frontend Diagram format for the Store.
+    const diagram = wsDiagramToFrontend(w, wsDiagram);
+    const newStore = new Store(diagram);
+    const label = diagramName || "Diagram";
+    w.innerDiagramTabs.push({
+      id: nextDocId(),
+      diagramId,
+      label,
+      store: newStore,
+      path: "", // no file path for SQLite-backed diagrams
+    });
+    w.activeInnerDiagramIndex = w.innerDiagramTabs.length - 1;
+    bindActiveTab();
+    refreshTabStrip();
+    updateEditorContentVisibility();
+    renderWorkspaceView();
+    appendStatus(`Opened diagram "${diagramName}"`);
+  } catch (e) {
+    showToast("Open failed: " + (e as Error).message);
+  }
+}
+
+/** Convert a WsDiagram from the backend to the frontend Diagram format. */
+function wsDiagramToFrontend(w: WorkspaceDoc, wd: import("./types").WsDiagram): Diagram {
+  // Build tables from placements + catalog data.
+  const tables: Table[] = (wd.tables || []).map(tp => {
+    const catalogTable = w.catalogTables.find(ct => ct.id === tp.catalogTableId);
+    return {
+      id: tp.id,
+      name: catalogTable?.name ?? "Unknown",
+      x: tp.x,
+      y: tp.y,
+      fields: catalogTable?.fields ? [...catalogTable.fields] : [],
+      catalogTableId: tp.catalogTableId,
+    };
+  });
+
+  // Build relationships from placements + catalog data.
+  const relationships: Relationship[] = (wd.relationships || []).map(rp => {
+    const catalogRel = w.catalogRelationships.find(cr => cr.id === rp.catalogRelationshipId);
+    const srcTable = tables.find(t => t.catalogTableId === catalogRel?.sourceCatalogTableId);
+    const tgtTable = tables.find(t => t.catalogTableId === catalogRel?.targetCatalogTableId);
+    let sourceFieldId = "";
+    let targetFieldId = "";
+    if (srcTable && catalogRel) {
+      const f = srcTable.fields.find(f => f.name === catalogRel.sourceFieldName);
+      sourceFieldId = f?.id ?? "";
+    }
+    if (tgtTable && catalogRel) {
+      const f = tgtTable.fields.find(f => f.name === catalogRel.targetFieldName);
+      targetFieldId = f?.id ?? "";
+    }
+    return {
+      id: rp.id,
+      sourceTableId: srcTable?.id ?? "",
+      sourceFieldId,
+      targetTableId: tgtTable?.id ?? "",
+      targetFieldId,
+      label: rp.label,
+      catalogRelationshipId: rp.catalogRelationshipId,
+    };
+  });
+
+  return {
+    version: wd.version || 1,
+    tables,
+    relationships,
+    notes: (wd.notes || []).map(n => ({
+      id: n.id,
+      x: n.x,
+      y: n.y,
+      text: n.text,
+      width: n.width,
+      height: n.height,
+    })),
+    textBlocks: (wd.textBlocks || []).map(tb => ({
+      id: tb.id,
+      x: tb.x,
+      y: tb.y,
+      text: tb.text,
+      width: tb.width,
+      height: tb.height,
+      fontSize: tb.fontSize,
+      useMarkdown: tb.useMarkdown,
+    })),
+    viewport: {
+      zoom: wd.viewportZoom || 1,
+      panX: wd.viewportPanX || 0,
+      panY: wd.viewportPanY || 0,
+    },
+  };
+}
+
+/** Convert a frontend Diagram (from a Store) to the backend WsDiagram format for saving. */
+function frontendDiagramToWs(diagramId: string, diagramName: string, d: Diagram): import("./types").WsDiagram {
+  return {
+    id: diagramId,
+    name: diagramName,
+    version: d.version || 1,
+    viewportZoom: d.viewport?.zoom ?? 1,
+    viewportPanX: d.viewport?.panX ?? 0,
+    viewportPanY: d.viewport?.panY ?? 0,
+    tables: (d.tables || []).filter(t => t.catalogTableId).map(t => ({
+      id: t.id,
+      diagramId,
+      catalogTableId: t.catalogTableId!,
+      x: t.x,
+      y: t.y,
+    })),
+    relationships: (d.relationships || []).filter(r => r.catalogRelationshipId).map(r => ({
+      id: r.id,
+      diagramId,
+      catalogRelationshipId: r.catalogRelationshipId!,
+      label: r.label,
+    })),
+    notes: (d.notes || []).map(n => ({
+      id: n.id,
+      diagramId,
+      x: n.x,
+      y: n.y,
+      text: n.text,
+      width: n.width,
+      height: n.height,
+    })),
+    textBlocks: (d.textBlocks || []).map(tb => ({
+      id: tb.id,
+      diagramId,
+      x: tb.x,
+      y: tb.y,
+      text: tb.text,
+      width: tb.width,
+      height: tb.height,
+      fontSize: tb.fontSize,
+      useMarkdown: tb.useMarkdown,
+    })),
+  };
+}
+
+/** Save the active diagram to the workspace SQLite database. */
+async function wsSaveDiagram(w: WorkspaceDoc, inner: InnerDiagramTab): Promise<void> {
+  if (!bridge.isBackendAvailable() || !inner.diagramId) return;
+  const d = inner.store.getDiagram();
+  const wsDiagram = frontendDiagramToWs(inner.diagramId, inner.label, d);
+  await bridge.saveDiagram(w.workspaceId, JSON.stringify(wsDiagram));
+}
+
+/** Legacy wrapper: open a .diagram file (for backward compatibility during migration). */
 async function openWorkspaceDiagramFile(
   w: WorkspaceDoc,
   filename: string
@@ -6173,6 +6683,7 @@ async function openWorkspaceDiagramFile(
     const label = filename.replace(/\.diagram$/i, "") || "Diagram";
     w.innerDiagramTabs.push({
       id: nextDocId(),
+      diagramId: "", // no SQLite ID for legacy files
       label,
       store: newStore,
       path: fullPath,
@@ -6256,44 +6767,32 @@ async function createWorkspaceDiagramWithName(
   w: WorkspaceDoc,
   baseName: string
 ): Promise<void> {
-  let filename = sanitizeDiagramFilename(baseName);
-  try {
-    const existing = await loadWorkspaceDiagramFiles(w);
-    const existingSet = new Set(existing.map((f) => f.toLowerCase()));
-    if (existingSet.has(filename.toLowerCase())) {
-      let n = 1;
-      const stem = filename.replace(/\.diagram$/i, "");
-      while (existingSet.has(filename.toLowerCase())) {
-        filename = stem + n + ".diagram";
-        n++;
-      }
-    }
-  } catch (_) {
-    // use chosen filename if list fails
-  }
-  const fullPath = pathJoin(w.rootPath, filename);
-  const label = filename.replace(/\.diagram$/i, "") || "Diagram";
+  const diagramId = "diag-" + Math.random().toString(36).slice(2, 11);
+  const label = baseName || "Diagram";
   const newStore = new Store();
   w.innerDiagramTabs.push({
     id: nextDocId(),
+    diagramId,
     label,
     store: newStore,
-    path: fullPath,
+    path: "", // no file path for SQLite-backed diagrams
   });
   w.activeInnerDiagramIndex = w.innerDiagramTabs.length - 1;
   bindActiveTab();
   refreshTabStrip();
   updateEditorContentVisibility();
   try {
-    await bridge.saveFile(fullPath, JSON.stringify(newStore.getDiagram()));
-    appendStatus(`Created ${filename}`);
+    const d = newStore.getDiagram();
+    const wsDiagram = frontendDiagramToWs(diagramId, label, d);
+    await bridge.saveDiagram(w.workspaceId, JSON.stringify(wsDiagram));
+    appendStatus(`Created diagram "${label}"`);
     showToast("New diagram");
   } catch (e) {
     appendStatus(
-      `Saved diagram to catalog; file write failed: ${(e as Error).message}`,
+      `Diagram created in memory; save failed: ${(e as Error).message}`,
       "error"
     );
-    showToast("New diagram (save to disk failed)");
+    showToast("New diagram (save failed)");
   }
   renderWorkspaceView();
 }
@@ -6307,10 +6806,13 @@ function switchWorkspaceInnerTab(w: WorkspaceDoc, index: number): void {
   persistViewportToStore();
   const leavingInner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
   if (leavingInner && w.autoSaveDiagrams && leavingInner.store.isDirty()) {
-    const path = leavingInner.path;
     const diagram = leavingInner.store.getDiagram();
     syncDiagramRelationshipsToCatalog(w, diagram)
-      .then(() => bridge.saveFile(path, JSON.stringify(diagram)))
+      .then(() =>
+        leavingInner.diagramId
+          ? wsSaveDiagram(w, leavingInner)
+          : bridge.saveFile(leavingInner.path, JSON.stringify(diagram))
+      )
       .then(() => {
         leavingInner.store.clearDirty();
         refreshTabStrip();
@@ -6358,7 +6860,7 @@ async function closeWorkspaceInnerTab(
   renderWorkspaceView();
 }
 
-async function saveWorkspaceSettings(
+async function saveWorkspaceSettingsFromModal(
   w: WorkspaceDoc,
   name: string,
   description: string,
@@ -6367,11 +6869,7 @@ async function saveWorkspaceSettings(
   w.name = name;
   w.description = description;
   w.autoSaveDiagrams = autoSaveDiagrams;
-  await saveWorkspaceConfig(w.rootPath, {
-    name,
-    description,
-    autoSaveDiagrams,
-  });
+  await wsSaveSettings(w);
   w.label = name || w.label;
   refreshTabStrip();
   showToast("Settings saved");
@@ -6461,8 +6959,8 @@ function showWorkspaceSettingsModal(w: WorkspaceDoc): void {
     }
     w.catalogTables = [];
     w.catalogRelationships = [];
-    await saveTableCatalog(w.rootPath, w.catalogTables);
-    await saveCatalogRelationships(w.rootPath, w.catalogRelationships);
+    await wsSaveFullCatalog(w);
+    await wsSaveAllCatalogRelationships(w);
     overlay.remove();
     bindActiveTab();
     refreshTabStrip();
@@ -6491,7 +6989,7 @@ function showWorkspaceSettingsModal(w: WorkspaceDoc): void {
     const description = descInput.value.trim();
     const autoSaveDiagrams = autoSaveCheckbox.checked;
     overlay.remove();
-    await saveWorkspaceSettings(w, name, description, autoSaveDiagrams);
+    await saveWorkspaceSettingsFromModal(w, name, description, autoSaveDiagrams);
     if (workspacePanelEl) renderWorkspaceView();
   };
   footerDiv.appendChild(cancelBtn);
@@ -6777,6 +7275,73 @@ async function confirmRemoveCatalogTable(
 }
 
 /** Show confirmation dialog, then delete the diagram file and close its tab if open. */
+/** Confirm and delete a diagram by SQLite ID. */
+function confirmDeleteDiagramById(w: WorkspaceDoc, diagramId: string, diagramName: string): void {
+  const message = `Delete diagram "${diagramName}"? This cannot be undone.`;
+  const existing = document.querySelector(".modal-overlay");
+  if (existing) existing.remove();
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  const panel = document.createElement("div");
+  panel.className = "modal-panel modal-panel-confirm";
+  const headerDiv = document.createElement("div");
+  headerDiv.className = "modal-confirm-header";
+  const title = document.createElement("h2");
+  title.className = "modal-title";
+  title.textContent = "Delete diagram";
+  headerDiv.appendChild(title);
+  panel.appendChild(headerDiv);
+  const contentDiv = document.createElement("div");
+  contentDiv.className = "modal-confirm-content";
+  const p = document.createElement("p");
+  p.textContent = message;
+  p.className = "modal-confirm-message";
+  contentDiv.appendChild(p);
+  panel.appendChild(contentDiv);
+  const footerDiv = document.createElement("div");
+  footerDiv.className = "modal-confirm-footer";
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.textContent = "Cancel";
+  cancelBtn.onclick = () => overlay.remove();
+  const deleteBtn = document.createElement("button");
+  deleteBtn.type = "button";
+  deleteBtn.textContent = "Delete";
+  deleteBtn.className = "modal-confirm-delete-btn";
+  deleteBtn.onclick = () => {
+    overlay.remove();
+    deleteDiagramById(w, diagramId).catch((e) =>
+      showToast("Delete failed: " + (e as Error).message)
+    );
+  };
+  footerDiv.appendChild(cancelBtn);
+  footerDiv.appendChild(deleteBtn);
+  panel.appendChild(footerDiv);
+  overlay.appendChild(panel);
+  document.body.appendChild(overlay);
+}
+
+/** Delete a diagram from the workspace SQLite database. */
+async function deleteDiagramById(w: WorkspaceDoc, diagramId: string): Promise<void> {
+  if (!bridge.isBackendAvailable()) return;
+  const tabIndex = w.innerDiagramTabs.findIndex((t) => t.diagramId === diagramId);
+  if (tabIndex >= 0) {
+    w.innerDiagramTabs.splice(tabIndex, 1);
+    if (w.activeInnerDiagramIndex >= w.innerDiagramTabs.length) {
+      w.activeInnerDiagramIndex = Math.max(0, w.innerDiagramTabs.length - 1);
+    } else if (tabIndex < w.activeInnerDiagramIndex) {
+      w.activeInnerDiagramIndex--;
+    }
+    bindActiveTab();
+  }
+  await bridge.deleteDiagram(w.workspaceId, diagramId);
+  refreshTabStrip();
+  if (workspacePanelEl) renderWorkspaceView();
+  updateEditorContentVisibility();
+  appendStatus("Diagram deleted");
+}
+
+/** Legacy: confirm and delete a diagram by filename. */
 function confirmDeleteDiagram(w: WorkspaceDoc, filename: string): void {
   const message = `Delete diagram "${filename}"? This cannot be undone.`;
 
@@ -6902,8 +7467,8 @@ async function removeCatalogTable(
       r.targetCatalogTableId !== catalogId
   );
   w.catalogTables.splice(idx, 1);
-  await saveTableCatalog(w.rootPath, w.catalogTables);
-  await saveCatalogRelationships(w.rootPath, w.catalogRelationships);
+  await wsSaveFullCatalog(w);
+  await wsSaveAllCatalogRelationships(w);
   refreshTabStrip();
   updateEditorContentVisibility();
   renderWorkspaceView();
@@ -6948,6 +7513,202 @@ function showEditor(): void {
   appendStatus("Ready. Use Import/Export from the toolbar.");
 }
 
+// ---------------------------------------------------------------------------
+// Migrate Legacy Workspace dialog
+// ---------------------------------------------------------------------------
+
+async function showMigrateWorkspaceDialog(): Promise<void> {
+  if (!bridge.isBackendAvailable()) {
+    showToast("Backend not available (run in Wails)");
+    return;
+  }
+
+  const existing = document.querySelector(".modal-overlay");
+  if (existing) existing.remove();
+
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  const panel = document.createElement("div");
+  panel.className = "modal-panel modal-panel-workspace-settings";
+
+  const headerDiv = document.createElement("div");
+  headerDiv.className = "modal-workspace-settings-header";
+  const title = document.createElement("h2");
+  title.className = "modal-title";
+  title.textContent = "Migrate Legacy Workspace";
+  headerDiv.appendChild(title);
+  panel.appendChild(headerDiv);
+
+  const contentDiv = document.createElement("div");
+  contentDiv.className = "modal-workspace-settings-content";
+
+  const desc = document.createElement("p");
+  desc.textContent = "Select the legacy workspace folder and choose where to save the new .schemastudio file.";
+  desc.style.marginBottom = "1rem";
+  contentDiv.appendChild(desc);
+
+  // Source folder row.
+  const srcRow = document.createElement("div");
+  srcRow.style.marginBottom = "0.75rem";
+  const srcLabel = document.createElement("label");
+  srcLabel.textContent = "Legacy Workspace Folder";
+  srcLabel.style.display = "block";
+  srcLabel.style.marginBottom = "0.25rem";
+  const srcInput = document.createElement("input");
+  srcInput.type = "text";
+  srcInput.className = "modal-input";
+  srcInput.readOnly = true;
+  srcInput.placeholder = "Click Browse to select…";
+  const srcBrowse = document.createElement("button");
+  srcBrowse.type = "button";
+  srcBrowse.textContent = "Browse…";
+  srcBrowse.style.marginLeft = "0.5rem";
+  srcBrowse.onclick = async () => {
+    try {
+      const dir = await bridge.openDirectoryDialog("Select legacy workspace folder");
+      if (dir) srcInput.value = dir;
+    } catch (e) {
+      showToast("Failed: " + (e as Error).message);
+    }
+  };
+  srcRow.appendChild(srcLabel);
+  const srcLine = document.createElement("div");
+  srcLine.style.display = "flex";
+  srcLine.style.alignItems = "center";
+  srcLine.appendChild(srcInput);
+  srcLine.appendChild(srcBrowse);
+  srcRow.appendChild(srcLine);
+  contentDiv.appendChild(srcRow);
+
+  // Destination file row.
+  const dstRow = document.createElement("div");
+  dstRow.style.marginBottom = "0.75rem";
+  const dstLabel = document.createElement("label");
+  dstLabel.textContent = "New .schemastudio File";
+  dstLabel.style.display = "block";
+  dstLabel.style.marginBottom = "0.25rem";
+  const dstInput = document.createElement("input");
+  dstInput.type = "text";
+  dstInput.className = "modal-input";
+  dstInput.readOnly = true;
+  dstInput.placeholder = "Click Browse to select…";
+  const dstBrowse = document.createElement("button");
+  dstBrowse.type = "button";
+  dstBrowse.textContent = "Browse…";
+  dstBrowse.style.marginLeft = "0.5rem";
+  dstBrowse.onclick = async () => {
+    try {
+      const path = await bridge.saveFileDialog(
+        "Save as .schemastudio",
+        "workspace.schemastudio",
+        "Schema Studio Workspace",
+        SCHEMASTUDIO_EXT
+      );
+      if (path) dstInput.value = path;
+    } catch (e) {
+      showToast("Failed: " + (e as Error).message);
+    }
+  };
+  dstRow.appendChild(dstLabel);
+  const dstLine = document.createElement("div");
+  dstLine.style.display = "flex";
+  dstLine.style.alignItems = "center";
+  dstLine.appendChild(dstInput);
+  dstLine.appendChild(dstBrowse);
+  dstRow.appendChild(dstLine);
+  contentDiv.appendChild(dstRow);
+
+  // Results area (initially hidden).
+  const resultsArea = document.createElement("div");
+  resultsArea.style.display = "none";
+  resultsArea.style.marginTop = "1rem";
+  resultsArea.style.maxHeight = "200px";
+  resultsArea.style.overflowY = "auto";
+  resultsArea.style.fontSize = "0.85rem";
+  resultsArea.style.fontFamily = "monospace";
+  resultsArea.style.whiteSpace = "pre-wrap";
+  resultsArea.style.padding = "0.5rem";
+  resultsArea.style.border = "1px solid var(--border)";
+  resultsArea.style.borderRadius = "4px";
+  contentDiv.appendChild(resultsArea);
+
+  panel.appendChild(contentDiv);
+
+  const footerDiv = document.createElement("div");
+  footerDiv.className = "modal-workspace-settings-footer";
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.textContent = "Close";
+  cancelBtn.onclick = () => overlay.remove();
+  const migrateRunBtn = document.createElement("button");
+  migrateRunBtn.type = "button";
+  migrateRunBtn.textContent = "Migrate";
+  migrateRunBtn.onclick = async () => {
+    const src = srcInput.value.trim();
+    const dst = dstInput.value.trim();
+    if (!src || !dst) {
+      showToast("Please select both source folder and destination file");
+      return;
+    }
+    migrateRunBtn.disabled = true;
+    migrateRunBtn.textContent = "Migrating…";
+    resultsArea.style.display = "block";
+    resultsArea.textContent = "Migration in progress…\n";
+    try {
+      const resultJSON = await bridge.migrateWorkspace(src, dst);
+      const result = JSON.parse(resultJSON) as {
+        tablesImported: number;
+        diagramsImported: number;
+        relationshipsImported: number;
+        warnings: string[];
+        errors: string[];
+      };
+      let text = `Migration complete!\n`;
+      text += `  Tables imported: ${result.tablesImported}\n`;
+      text += `  Relationships imported: ${result.relationshipsImported}\n`;
+      text += `  Diagrams imported: ${result.diagramsImported}\n`;
+      if (result.warnings && result.warnings.length > 0) {
+        text += `\nWarnings:\n`;
+        for (const w of result.warnings) {
+          text += `  - ${w}\n`;
+        }
+      }
+      if (result.errors && result.errors.length > 0) {
+        text += `\nErrors:\n`;
+        for (const e of result.errors) {
+          text += `  - ${e}\n`;
+        }
+      }
+      resultsArea.textContent = text;
+      showToast("Migration complete");
+      // Add "Open Migrated Workspace" button.
+      const openBtn = document.createElement("button");
+      openBtn.type = "button";
+      openBtn.textContent = "Open Migrated Workspace";
+      openBtn.style.marginTop = "0.5rem";
+      openBtn.onclick = () => {
+        overlay.remove();
+        openWorkspaceTab(dst);
+      };
+      resultsArea.appendChild(document.createElement("br"));
+      resultsArea.appendChild(openBtn);
+    } catch (e) {
+      resultsArea.textContent = "Migration failed: " + (e as Error).message;
+      showToast("Migration failed");
+    }
+    migrateRunBtn.disabled = false;
+    migrateRunBtn.textContent = "Migrate";
+  };
+  const openAfterBtn = document.createElement("button");
+  openAfterBtn.style.display = "none"; // shown after migration
+  footerDiv.appendChild(cancelBtn);
+  footerDiv.appendChild(migrateRunBtn);
+  panel.appendChild(footerDiv);
+
+  overlay.appendChild(panel);
+  document.body.appendChild(overlay);
+}
+
 function setupMenuBar(menuBar: HTMLElement): void {
   const fileMenu = document.createElement("div");
   fileMenu.className = "menu-bar-item";
@@ -6961,20 +7722,13 @@ function setupMenuBar(menuBar: HTMLElement): void {
   const fileItems = [
     ["New Workspace", () => newWorkspaceTab(), false],
     ["Open Workspace", () => openWorkspaceTab(), false],
-    ["New Diagram", () => newDiagramTab(), false],
-    ["Open Diagram", () => openDiagramTab(), false],
     null,
     ["Save", () => saveDiagram().then((s) => s && showToast("Saved")), false],
-    [
-      "Save As…",
-      () => saveDiagramAs().then((s) => s && showToast("Saved")),
-      false,
-    ],
     ["Close Diagram", () => closeActiveDiagram(), false],
     ["Close Workspace", () => closeWorkspaceTab(), false],
     ["Close All Diagrams", () => closeAllDiagramTabs(), false],
     null,
-    ["Exit", () => window.close(), false],
+    ["Exit", () => exitApp(), false],
   ] as [string, () => void | Promise<void>, boolean][];
   const fileActionMap: Record<string, string> = {
     "Close Diagram": "close-diagram",
@@ -7218,6 +7972,20 @@ function setupMenuBar(menuBar: HTMLElement): void {
   layoutWrapper.appendChild(layoutFlyout);
   toolsDropdown.appendChild(layoutWrapper);
 
+  // --- Migrate Legacy Workspace ---
+  const sep3 = document.createElement("div");
+  sep3.className = "menu-bar-sep";
+  toolsDropdown.appendChild(sep3);
+  const migrateBtn = document.createElement("button");
+  migrateBtn.type = "button";
+  migrateBtn.className = "menu-bar-dropdown-item";
+  migrateBtn.textContent = "Migrate Legacy Workspace…";
+  migrateBtn.onclick = () => {
+    hideMenus();
+    showMigrateWorkspaceDialog();
+  };
+  toolsDropdown.appendChild(migrateBtn);
+
   toolsMenu.appendChild(toolsDropdown);
   menuBar.appendChild(toolsMenu);
 
@@ -7284,7 +8052,7 @@ async function syncRelationshipToCatalog(
   };
   w.catalogRelationships.push(catalogRel);
   rel.catalogRelationshipId = catalogRel.id;
-  await saveCatalogRelationships(w.rootPath, w.catalogRelationships);
+  await wsSaveAllCatalogRelationships(w);
 }
 
 async function syncRelationshipRemovalFromCatalog(
@@ -7297,7 +8065,7 @@ async function syncRelationshipRemovalFromCatalog(
   );
   if (idx >= 0) {
     w.catalogRelationships.splice(idx, 1);
-    await saveCatalogRelationships(w.rootPath, w.catalogRelationships);
+    await wsSaveAllCatalogRelationships(w);
   }
 }
 
@@ -7321,7 +8089,7 @@ async function syncRelationshipUpdateToCatalog(
   );
   if (srcField) catRel.sourceFieldName = srcField.name;
   if (tgtField) catRel.targetFieldName = tgtField.name;
-  await saveCatalogRelationships(w.rootPath, w.catalogRelationships);
+  await wsSaveAllCatalogRelationships(w);
 }
 
 /** Create diagram relationships from catalog for the just-added table (by catalog id). */
@@ -7407,7 +8175,7 @@ async function syncDiagramRelationshipsToCatalog(
     }
   }
   if (changed)
-    await saveCatalogRelationships(w.rootPath, w.catalogRelationships);
+    await wsSaveAllCatalogRelationships(w);
 }
 
 async function syncTableToCatalogAndDiagrams(tableId: string): Promise<void> {
@@ -7452,7 +8220,7 @@ async function syncTableToCatalogAndDiagrams(tableId: string): Promise<void> {
       tab.store.clearDirty();
     }
   }
-  await saveTableCatalog(w.rootPath, w.catalogTables);
+  await wsSaveFullCatalog(w);
   refreshTabStrip();
   updateEditorContentVisibility();
   renderWorkspaceView();
@@ -7486,7 +8254,7 @@ function addTableToCurrentDiagram(x: number, y: number): void {
     };
     w.catalogTables.push(catalogEntry);
     inner.store.addTableWithContent(x, y, name, defaultFields, catalogId);
-    saveTableCatalog(w.rootPath, w.catalogTables).catch((e) =>
+    wsSaveFullCatalog(w).catch((e) =>
       showToast("Failed to save catalog: " + (e as Error).message)
     );
     render();
@@ -7523,6 +8291,14 @@ async function closeActiveDiagram(): Promise<void> {
 
 async function closeWorkspaceTab(): Promise<void> {
   if (!currentWorkspace) return;
+  // Close the SQLite connection for this workspace.
+  if (currentWorkspace.workspaceId && bridge.isBackendAvailable()) {
+    try {
+      await bridge.closeWorkspace(currentWorkspace.workspaceId);
+    } catch {
+      // ignore close errors
+    }
+  }
   currentWorkspace = null;
   workspacePanelEl = null;
   if (documents.length > 0) {

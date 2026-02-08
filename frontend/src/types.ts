@@ -57,6 +57,162 @@ export interface CatalogRelationship {
   targetFieldName: string;
 }
 
+// ---------------------------------------------------------------------------
+// New workspace / SQLite-backed types
+// ---------------------------------------------------------------------------
+
+/** Catalog relationship field mapping (for composite foreign keys). */
+export interface CatalogRelationshipField {
+  relationshipId: string;
+  sourceFieldId: string;
+  targetFieldId: string;
+  sortOrder: number;
+}
+
+/** New-style catalog relationship stored in SQLite. */
+export interface WsCatalogRelationship {
+  id: string;
+  sourceTableId: string;
+  targetTableId: string;
+  name?: string;
+  note?: string;
+  cardinality?: string;
+  fields?: CatalogRelationshipField[];
+}
+
+/** Diagram table placement (positions a catalog table on a diagram). */
+export interface DiagramTablePlacement {
+  id: string;
+  diagramId: string;
+  catalogTableId: string;
+  x: number;
+  y: number;
+}
+
+/** Diagram relationship placement. */
+export interface DiagramRelationshipPlacement {
+  id: string;
+  diagramId: string;
+  catalogRelationshipId: string;
+  label?: string;
+}
+
+/** Diagram note (SQLite-backed). */
+export interface DiagramNote {
+  id: string;
+  diagramId: string;
+  x: number;
+  y: number;
+  text: string;
+  width?: number;
+  height?: number;
+}
+
+/** Diagram text block (SQLite-backed). */
+export interface DiagramTextBlock {
+  id: string;
+  diagramId: string;
+  x: number;
+  y: number;
+  text: string;
+  width?: number;
+  height?: number;
+  fontSize?: number;
+  useMarkdown?: boolean;
+}
+
+/** Full diagram as stored in SQLite. */
+export interface WsDiagram {
+  id: string;
+  name: string;
+  version: number;
+  viewportZoom: number;
+  viewportPanX: number;
+  viewportPanY: number;
+  tables?: DiagramTablePlacement[];
+  relationships?: DiagramRelationshipPlacement[];
+  notes?: DiagramNote[];
+  textBlocks?: DiagramTextBlock[];
+}
+
+/** Lightweight diagram listing (no child data). */
+export interface DiagramSummary {
+  id: string;
+  name: string;
+}
+
+/** Workspace settings as stored in SQLite. */
+export interface WsSettings {
+  name: string;
+  description?: string;
+  autoSaveDiagrams?: boolean;
+  notationStyle?: string;
+}
+
+/** Catalog field with type overrides, as stored in SQLite. */
+export interface WsCatalogField {
+  id: string;
+  tableId: string;
+  name: string;
+  type: string;
+  nullable?: boolean;
+  primaryKey?: boolean;
+  length?: number;
+  precision?: number;
+  scale?: number;
+  sortOrder: number;
+  typeOverrides?: WsCatalogFieldTypeOverride[];
+}
+
+/** Per-dialect type override for a catalog field. */
+export interface WsCatalogFieldTypeOverride {
+  fieldId: string;
+  dialect: string;
+  typeOverride: string;
+}
+
+/** Catalog table with fields, as stored in SQLite. */
+export interface WsCatalogTable {
+  id: string;
+  name: string;
+  sortOrder: number;
+  fields: WsCatalogField[];
+}
+
+/** Workspace connection profile (stored in SQLite). */
+export interface WsConnectionProfile {
+  id: string;
+  name: string;
+  driver: string;
+  host?: string;
+  port?: number;
+  databaseName?: string;
+  username?: string;
+  sslMode?: string;
+  project?: string;
+  dataset?: string;
+  credentialsFile?: string;
+  bigqueryAuthMode?: string;
+}
+
+/** Result returned by CreateWorkspace. */
+export interface CreateWorkspaceResult {
+  workspaceId: string;
+  filePath: string;
+  settings: WsSettings;
+}
+
+/** Result returned by OpenWorkspace. */
+export interface OpenWorkspaceResult {
+  workspaceId: string;
+  filePath: string;
+  settings: WsSettings;
+  catalogTables: WsCatalogTable[];
+  catalogRelationships: WsCatalogRelationship[];
+  diagrams: DiagramSummary[];
+  uiState: Record<string, string>;
+}
+
 export const CARDINALITY_OPTIONS = [
   "1-to-1",
   "1-to-many",

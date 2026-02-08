@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -14,18 +15,23 @@ import (
 	"schemastudio/internal/importers"
 	"schemastudio/internal/schema"
 	"schemastudio/internal/sqlx"
+	"schemastudio/internal/workspace"
 )
 
-// App is the Wails-bound application for file I/O and export/import.
+// App is the Wails-bound application for file I/O, workspace management, and export/import.
 type App struct {
 	ctx     context.Context
 	version string
+	wm      *workspace.WorkspaceManager
 }
 
-// NewApp returns a new App. version is the application version (e.g. "0.2.0").
+// NewApp returns a new App. version is the application version (e.g. "0.4.0").
 // Call Startup with the Wails context before using dialogs.
 func NewApp(version string) *App {
-	return &App{version: version}
+	return &App{
+		version: version,
+		wm:      workspace.NewManager(),
+	}
 }
 
 // Version returns the application version.
@@ -37,6 +43,436 @@ func (a *App) Version() string {
 func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
 }
+
+// Shutdown is called by Wails when the app is closing; close all open workspaces.
+func (a *App) Shutdown(ctx context.Context) {
+	a.wm.CloseAll()
+}
+
+// ---------------------------------------------------------------------------
+// Workspace lifecycle
+// ---------------------------------------------------------------------------
+
+// createWorkspaceResult is the JSON envelope returned by CreateWorkspace / OpenWorkspace.
+type createWorkspaceResult struct {
+	WorkspaceID string                     `json:"workspaceId"`
+	FilePath    string                     `json:"filePath"`
+	Settings    workspace.WorkspaceSettings `json:"settings"`
+}
+
+// CreateWorkspace creates a new .schemastudio file, initializes the schema, and
+// returns JSON with the workspace ID, file path, and default settings.
+func (a *App) CreateWorkspace(filePath string) (string, error) {
+	wsID, repo, err := a.wm.CreateWorkspace(filePath)
+	if err != nil {
+		return "", fmt.Errorf("create workspace: %w", err)
+	}
+	settings, err := repo.GetAllSettings()
+	if err != nil {
+		return "", err
+	}
+	return marshalJSON(createWorkspaceResult{
+		WorkspaceID: wsID,
+		FilePath:    filePath,
+		Settings:    settings,
+	})
+}
+
+// openWorkspaceResult is the JSON envelope returned by OpenWorkspace.
+type openWorkspaceResult struct {
+	WorkspaceID          string                           `json:"workspaceId"`
+	FilePath             string                           `json:"filePath"`
+	Settings             workspace.WorkspaceSettings       `json:"settings"`
+	CatalogTables        []workspace.CatalogTable          `json:"catalogTables"`
+	CatalogRelationships []workspace.CatalogRelationship   `json:"catalogRelationships"`
+	Diagrams             []workspace.DiagramSummary        `json:"diagrams"`
+	UIState              workspace.UIState                 `json:"uiState"`
+}
+
+// OpenWorkspace opens an existing .schemastudio file and returns JSON with the
+// full workspace state (settings, catalog, diagrams list, UI state).
+func (a *App) OpenWorkspace(filePath string) (string, error) {
+	wsID, repo, err := a.wm.OpenWorkspace(filePath)
+	if err != nil {
+		return "", fmt.Errorf("open workspace: %w", err)
+	}
+
+	settings, err := repo.GetAllSettings()
+	if err != nil {
+		return "", err
+	}
+	tables, err := repo.ListCatalogTables()
+	if err != nil {
+		return "", err
+	}
+	if tables == nil {
+		tables = []workspace.CatalogTable{}
+	}
+	rels, err := repo.ListCatalogRelationships()
+	if err != nil {
+		return "", err
+	}
+	if rels == nil {
+		rels = []workspace.CatalogRelationship{}
+	}
+	diagrams, err := repo.ListDiagrams()
+	if err != nil {
+		return "", err
+	}
+	if diagrams == nil {
+		diagrams = []workspace.DiagramSummary{}
+	}
+	uiState, err := repo.GetUIState()
+	if err != nil {
+		return "", err
+	}
+	if uiState == nil {
+		uiState = workspace.UIState{}
+	}
+
+	return marshalJSON(openWorkspaceResult{
+		WorkspaceID:          wsID,
+		FilePath:             filePath,
+		Settings:             settings,
+		CatalogTables:        tables,
+		CatalogRelationships: rels,
+		Diagrams:             diagrams,
+		UIState:              uiState,
+	})
+}
+
+// CloseWorkspace closes the SQLite connection for a workspace.
+func (a *App) CloseWorkspace(wsID string) error {
+	return a.wm.CloseWorkspace(wsID)
+}
+
+// ---------------------------------------------------------------------------
+// Workspace Settings
+// ---------------------------------------------------------------------------
+
+// GetWorkspaceSettings returns workspace settings as JSON.
+func (a *App) GetWorkspaceSettings(wsID string) (string, error) {
+	repo := a.wm.GetRepo(wsID)
+	if repo == nil {
+		return "", fmt.Errorf("workspace %s not open", wsID)
+	}
+	settings, err := repo.GetAllSettings()
+	if err != nil {
+		return "", err
+	}
+	return marshalJSON(settings)
+}
+
+// SaveWorkspaceSetting saves a single workspace setting.
+func (a *App) SaveWorkspaceSetting(wsID string, key string, value string) error {
+	repo := a.wm.GetRepo(wsID)
+	if repo == nil {
+		return fmt.Errorf("workspace %s not open", wsID)
+	}
+	return repo.SetSetting(key, value)
+}
+
+// SaveWorkspaceSettings saves all workspace settings from JSON.
+func (a *App) SaveWorkspaceSettings(wsID string, settingsJSON string) error {
+	repo := a.wm.GetRepo(wsID)
+	if repo == nil {
+		return fmt.Errorf("workspace %s not open", wsID)
+	}
+	var s workspace.WorkspaceSettings
+	if err := json.Unmarshal([]byte(settingsJSON), &s); err != nil {
+		return err
+	}
+	return repo.SaveAllSettings(s)
+}
+
+// ---------------------------------------------------------------------------
+// Catalog Tables
+// ---------------------------------------------------------------------------
+
+// GetCatalogTables returns all catalog tables as JSON.
+func (a *App) GetCatalogTables(wsID string) (string, error) {
+	repo := a.wm.GetRepo(wsID)
+	if repo == nil {
+		return "", fmt.Errorf("workspace %s not open", wsID)
+	}
+	tables, err := repo.ListCatalogTables()
+	if err != nil {
+		return "", err
+	}
+	if tables == nil {
+		tables = []workspace.CatalogTable{}
+	}
+	return marshalJSON(tables)
+}
+
+// SaveCatalogTable upserts a catalog table (with fields and type overrides) from JSON.
+func (a *App) SaveCatalogTable(wsID string, tableJSON string) error {
+	repo := a.wm.GetRepo(wsID)
+	if repo == nil {
+		return fmt.Errorf("workspace %s not open", wsID)
+	}
+	var t workspace.CatalogTable
+	if err := json.Unmarshal([]byte(tableJSON), &t); err != nil {
+		return err
+	}
+	return repo.SaveCatalogTable(t)
+}
+
+// DeleteCatalogTable removes a catalog table by ID.
+func (a *App) DeleteCatalogTable(wsID string, tableID string) error {
+	repo := a.wm.GetRepo(wsID)
+	if repo == nil {
+		return fmt.Errorf("workspace %s not open", wsID)
+	}
+	return repo.DeleteCatalogTable(tableID)
+}
+
+// ---------------------------------------------------------------------------
+// Catalog Fields
+// ---------------------------------------------------------------------------
+
+// SaveCatalogField upserts a single catalog field (with type overrides) from JSON.
+func (a *App) SaveCatalogField(wsID string, fieldJSON string) error {
+	repo := a.wm.GetRepo(wsID)
+	if repo == nil {
+		return fmt.Errorf("workspace %s not open", wsID)
+	}
+	var f workspace.CatalogField
+	if err := json.Unmarshal([]byte(fieldJSON), &f); err != nil {
+		return err
+	}
+	return repo.SaveField(f)
+}
+
+// DeleteCatalogField removes a catalog field by ID.
+func (a *App) DeleteCatalogField(wsID string, fieldID string) error {
+	repo := a.wm.GetRepo(wsID)
+	if repo == nil {
+		return fmt.Errorf("workspace %s not open", wsID)
+	}
+	return repo.DeleteField(fieldID)
+}
+
+// ---------------------------------------------------------------------------
+// Catalog Relationships
+// ---------------------------------------------------------------------------
+
+// GetCatalogRelationships returns all catalog relationships as JSON.
+func (a *App) GetCatalogRelationships(wsID string) (string, error) {
+	repo := a.wm.GetRepo(wsID)
+	if repo == nil {
+		return "", fmt.Errorf("workspace %s not open", wsID)
+	}
+	rels, err := repo.ListCatalogRelationships()
+	if err != nil {
+		return "", err
+	}
+	if rels == nil {
+		rels = []workspace.CatalogRelationship{}
+	}
+	return marshalJSON(rels)
+}
+
+// SaveCatalogRelationship upserts a catalog relationship from JSON.
+func (a *App) SaveCatalogRelationship(wsID string, relJSON string) error {
+	repo := a.wm.GetRepo(wsID)
+	if repo == nil {
+		return fmt.Errorf("workspace %s not open", wsID)
+	}
+	var rel workspace.CatalogRelationship
+	if err := json.Unmarshal([]byte(relJSON), &rel); err != nil {
+		return err
+	}
+	return repo.SaveCatalogRelationship(rel)
+}
+
+// DeleteCatalogRelationship removes a catalog relationship by ID.
+func (a *App) DeleteCatalogRelationship(wsID string, relID string) error {
+	repo := a.wm.GetRepo(wsID)
+	if repo == nil {
+		return fmt.Errorf("workspace %s not open", wsID)
+	}
+	return repo.DeleteCatalogRelationship(relID)
+}
+
+// ---------------------------------------------------------------------------
+// Diagrams
+// ---------------------------------------------------------------------------
+
+// ListDiagrams returns lightweight diagram summaries as JSON.
+func (a *App) ListWorkspaceDiagrams(wsID string) (string, error) {
+	repo := a.wm.GetRepo(wsID)
+	if repo == nil {
+		return "", fmt.Errorf("workspace %s not open", wsID)
+	}
+	diagrams, err := repo.ListDiagrams()
+	if err != nil {
+		return "", err
+	}
+	if diagrams == nil {
+		diagrams = []workspace.DiagramSummary{}
+	}
+	return marshalJSON(diagrams)
+}
+
+// GetDiagram returns a full diagram (with placements, notes, text blocks) as JSON.
+func (a *App) GetDiagram(wsID string, diagramID string) (string, error) {
+	repo := a.wm.GetRepo(wsID)
+	if repo == nil {
+		return "", fmt.Errorf("workspace %s not open", wsID)
+	}
+	d, err := repo.GetDiagram(diagramID)
+	if err != nil {
+		return "", err
+	}
+	if d == nil {
+		return "", fmt.Errorf("diagram %s not found", diagramID)
+	}
+	return marshalJSON(d)
+}
+
+// SaveDiagram upserts a diagram (with all child elements) from JSON.
+func (a *App) SaveDiagram(wsID string, diagramJSON string) error {
+	repo := a.wm.GetRepo(wsID)
+	if repo == nil {
+		return fmt.Errorf("workspace %s not open", wsID)
+	}
+	var d workspace.Diagram
+	if err := json.Unmarshal([]byte(diagramJSON), &d); err != nil {
+		return err
+	}
+	return repo.SaveDiagram(d)
+}
+
+// DeleteDiagram removes a diagram by ID.
+func (a *App) DeleteDiagram(wsID string, diagramID string) error {
+	repo := a.wm.GetRepo(wsID)
+	if repo == nil {
+		return fmt.Errorf("workspace %s not open", wsID)
+	}
+	return repo.DeleteDiagram(diagramID)
+}
+
+// ---------------------------------------------------------------------------
+// UI State
+// ---------------------------------------------------------------------------
+
+// GetUIState returns the workspace UI state as JSON.
+func (a *App) GetUIState(wsID string) (string, error) {
+	repo := a.wm.GetRepo(wsID)
+	if repo == nil {
+		return "", fmt.Errorf("workspace %s not open", wsID)
+	}
+	state, err := repo.GetUIState()
+	if err != nil {
+		return "", err
+	}
+	if state == nil {
+		state = workspace.UIState{}
+	}
+	return marshalJSON(state)
+}
+
+// SaveUIState saves the workspace UI state from JSON.
+func (a *App) SaveUIState(wsID string, stateJSON string) error {
+	repo := a.wm.GetRepo(wsID)
+	if repo == nil {
+		return fmt.Errorf("workspace %s not open", wsID)
+	}
+	var state workspace.UIState
+	if err := json.Unmarshal([]byte(stateJSON), &state); err != nil {
+		return err
+	}
+	return repo.SaveUIState(state)
+}
+
+// ---------------------------------------------------------------------------
+// Workspace Connection Profiles
+// ---------------------------------------------------------------------------
+
+// GetWorkspaceConnectionProfiles returns workspace-scoped connection profiles as JSON.
+func (a *App) GetWorkspaceConnectionProfiles(wsID string) (string, error) {
+	repo := a.wm.GetRepo(wsID)
+	if repo == nil {
+		return "", fmt.Errorf("workspace %s not open", wsID)
+	}
+	profiles, err := repo.ListConnectionProfiles()
+	if err != nil {
+		return "", err
+	}
+	if profiles == nil {
+		profiles = []workspace.ConnectionProfile{}
+	}
+	return marshalJSON(profiles)
+}
+
+// SaveWorkspaceConnectionProfile upserts a workspace-scoped connection profile from JSON.
+func (a *App) SaveWorkspaceConnectionProfile(wsID string, profileJSON string) error {
+	repo := a.wm.GetRepo(wsID)
+	if repo == nil {
+		return fmt.Errorf("workspace %s not open", wsID)
+	}
+	var p workspace.ConnectionProfile
+	if err := json.Unmarshal([]byte(profileJSON), &p); err != nil {
+		return err
+	}
+	return repo.SaveConnectionProfile(p)
+}
+
+// DeleteWorkspaceConnectionProfile removes a workspace-scoped connection profile by ID.
+func (a *App) DeleteWorkspaceConnectionProfile(wsID string, profileID string) error {
+	repo := a.wm.GetRepo(wsID)
+	if repo == nil {
+		return fmt.Errorf("workspace %s not open", wsID)
+	}
+	return repo.DeleteConnectionProfile(profileID)
+}
+
+// ImportGlobalProfile copies a global connection profile into the workspace.
+func (a *App) ImportGlobalProfile(wsID string, globalProfileName string) error {
+	repo := a.wm.GetRepo(wsID)
+	if repo == nil {
+		return fmt.Errorf("workspace %s not open", wsID)
+	}
+	// Load the global profile JSON.
+	dir, err := connectionProfilesDir()
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(filepath.Join(dir, globalProfileName+".json"))
+	if err != nil {
+		return fmt.Errorf("load global profile: %w", err)
+	}
+	var p workspace.ConnectionProfile
+	if err := json.Unmarshal(data, &p); err != nil {
+		return fmt.Errorf("parse global profile: %w", err)
+	}
+	// Ensure it has a unique ID in the workspace context.
+	if p.ID == "" {
+		p.ID = globalProfileName
+	}
+	p.Name = globalProfileName
+	return repo.SaveConnectionProfile(p)
+}
+
+// ---------------------------------------------------------------------------
+// Migration
+// ---------------------------------------------------------------------------
+
+// MigrateWorkspace reads a legacy file-based workspace at oldRootPath and
+// writes it into a new .schemastudio SQLite database at newFilePath.
+// Returns JSON with migration results (tables/diagrams imported, warnings, errors).
+func (a *App) MigrateWorkspace(oldRootPath string, newFilePath string) (string, error) {
+	result, err := workspace.MigrateFromFolder(oldRootPath, newFilePath)
+	if err != nil {
+		return "", fmt.Errorf("migration failed: %w", err)
+	}
+	return marshalJSON(result)
+}
+
+// ---------------------------------------------------------------------------
+// Legacy file I/O (kept for backward compatibility during migration)
+// ---------------------------------------------------------------------------
 
 // Save writes the diagram JSON to the given path.
 func (a *App) Save(path string, content string) error {
@@ -408,4 +844,13 @@ func connectionProfilesDir() (string, error) {
 		return "", err
 	}
 	return dir, nil
+}
+
+// marshalJSON is a helper that marshals v to a JSON string.
+func marshalJSON(v interface{}) (string, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }

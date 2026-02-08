@@ -9,6 +9,7 @@
 [ ] Get force-directed layout working. Make it just a view option instead of a layout.
 [x] Text blocks on diagram - to do things like diagram titles, etc. Be able to modify font sizes, etc. No background.
 [x] Diagrams/models show generic data types. Define default mappings to specific DBMSs - e.g. Postgres, BigQuery, SQLite, etc.
+[x] New application data storage approach - Store Workspaces and their artifacts in a SQLite database file instead of a folder
 
 ## Text Blocks
 
@@ -67,6 +68,32 @@ Since field lengths are fairly common across many databases, let's surface a len
 
 The current export to PNG and SVG do not properly render notes and text blocks that are on the diagram. Notes show up as a black box. Investigate and fix this problem.
 Text blocks, a newly added feature, do not render at all on the images. Add text blocks to the image exports.
+
+# New application data storage approach
+
+We currently store application artifacts (workspace settings, table catalog, diagrams, etc) in JSON files within a workspace folder. Let's change this so that artifact storage becomes cleaner and more organized. The high level view of the change is as follows:
+
+- Independent diagrams (creating and editing a diagram independently from a Workspace) is no longer supported. All diagramming will be within the context of a Workspace.
+- All Workspace artifacts - table catalog, diagrams, database connections, etc - will be stored in a SQLite database file, the new application file format for Schema Studio.
+
+The migration to using a SQLite database requires some careful consideration and architechural/design choices.
+
+- When a Workspace is created or opened, the user is prompted to select a `<workspace name>.schemastudio` file, which is a SQLite database.
+- All current code that read and write table definitions, workspace settings, workspace settings, and diagrams must be refactored to get that data from the SQLite database. It would be best to route all read/write operations through a Workspace repository in the Go code.
+- Appication data is currently represented in JSON format. Would this be better as a set of carefully designed tables in SQLite, or as JSON blobs in SQLite tables? It may depend on the data. e.g. It makes sense to store Workspace settings in a table, whereas it might be more appropriate to store diagrams in a `diagrams` table with a schema like `id (int)`, `name (string)`, `diagram (json blob)`. The table catalog would work very well as a set of tables. e.g. `catalog_tables`, `catalog_table_fields`, `dbms_targets`, `dbms_target_data_types`, `catalog_target_mappings`, `catalog_target_field_mappings`, etc.
+- Using a SQLite file makes it easier to share things with others by simply providing them with the .schemastudio file.
+- Since this is going to be a breaking change, we'll need a feature under the Tools menu for migrating the existing file-based workspaces to the new format. The migrator should also validate and update old workspace file/data issues as it imports the files into the new format. e.g. Ensure that data types catalog and diagrams are properly mapped to our internal modelling data types, capturing things like field lengths as appropriate.
+
+Let's carefully consider the necessary changes to the codebase to achieve this change. Create a phased plan for implementing this change. Do not make any assumptions, but ask question to clarify anything that is not clear or needs directional decisions.
+
+## Fixes and Polish
+
+- Table relationships in diagrams in workspaces that are migrated to the new format sometimes do not not get imported and are missing from diagrams. Please investigate.
+- The OK button on the Table Editor opened from the catalog does not seem to work. Clicking on it does not dismiss the dialog. However, the OK button in the editor opened from a diagram for the same table works as
+
+---
+
+# Misc Notes
 
 ## Tech Research
 
