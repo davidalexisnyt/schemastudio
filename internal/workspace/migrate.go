@@ -169,9 +169,8 @@ func MigrateFromFolder(oldRootPath, newFilePath string) (MigrationResult, error)
 			result.Warnings = append(result.Warnings, "workspace.config.json parse error: "+err.Error())
 		} else {
 			repo.SaveAllSettings(WorkspaceSettings{
-				Name:             config.Name,
-				Description:      config.Description,
-				AutoSaveDiagrams: config.AutoSaveDiagrams,
+				Name:        config.Name,
+				Description: config.Description,
 			})
 		}
 	}

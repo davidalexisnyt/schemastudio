@@ -80,9 +80,8 @@ let currentFilePath: string | null = null;
 let unsubscribeStore: (() => void) | null = null;
 /** Re-bind store subscription (call after bindActiveTab so render/undo/redo track the active store). */
 let bindStoreSubscription: (() => void) | null = null;
-/** Pending auto-save timeout; cleared when switching tabs or when save runs. */
-let autoSaveTimeoutId: ReturnType<typeof setTimeout> | null = null;
-const AUTO_SAVE_DELAY_MS = 5000;
+/** In-flight auto-save promise so we don't stack concurrent saves. */
+let autoSaveInFlight: Promise<void> | null = null;
 
 /** Inline SVG for trash/delete icon (16×16). */
 const TRASH_ICON_SVG =
@@ -129,8 +128,6 @@ type WorkspaceDoc = {
   catalogRelationships: CatalogRelationship[];
   innerDiagramTabs: InnerDiagramTab[];
   activeInnerDiagramIndex: number;
-  /** When true, save diagrams automatically. */
-  autoSaveDiagrams?: boolean;
   /** Sidebar accordion open state and scroll; persisted in workspace.state. */
   workspaceUIState?: WorkspaceUIState;
 };
@@ -932,129 +929,37 @@ function setupDocumentDragListeners(): void {
   document.addEventListener("mouseup", onDocumentDragUp);
 }
 
-/** Returns true if save completed (or no backend), false on cancel or error. */
-async function saveDiagram(): Promise<boolean> {
-  if (!bridge.isBackendAvailable()) {
-    showToast("Backend not available (run in Wails)");
-    return false;
-  }
+/**
+ * Auto-save the active workspace diagram immediately.
+ * Called from the store subscription whenever the store becomes dirty.
+ * Skips non-workspace docs and diagrams without a diagramId (legacy).
+ *
+ * Uses a generation counter so that if new changes arrive while a save is
+ * in-flight, the save will re-run to capture the latest state.
+ */
+let autoSaveGeneration = 0;
+async function autoSaveActiveDiagram(): Promise<void> {
+  if (!bridge.isBackendAvailable()) return;
+  const doc = getActiveDoc();
+  if (doc?.type !== "workspace") return;
+  const w = doc as WorkspaceDoc;
+  const inner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
+  if (!inner || !inner.diagramId || inner.store !== store) return;
   try {
-    const doc = getActiveDoc();
-    if (doc?.type === "workspace") {
-      const w = doc as WorkspaceDoc;
-      const inner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
+    let gen: number;
+    do {
+      gen = autoSaveGeneration;
       await syncDiagramRelationshipsToCatalog(w, store.getDiagram());
-      if (inner && inner.diagramId) {
-        // SQLite-backed diagram: save to workspace database.
-        await wsSaveDiagram(w, inner);
-        store.clearDirty();
-        refreshTabStrip();
-        if (workspacePanelEl) renderWorkspaceView();
-        appendStatus(`Saved diagram "${inner.label}"`);
-        return true;
-      }
-      // Legacy file-based fallback.
-      let path = inner?.path || currentFilePath;
-      if (!path) {
-        path = await bridge.saveFileDialog("Save diagram", "schema.diagram", "Diagram", "*.diagram");
-        if (!path) return false;
-        if (inner) inner.path = path;
-        currentFilePath = path;
-      }
-      await bridge.saveFile(path, JSON.stringify(store.getDiagram()));
-      store.clearDirty();
-      refreshTabStrip();
-      if (workspacePanelEl) renderWorkspaceView();
-      appendStatus(`Saved ${path}`);
-      return true;
-    } else if (doc?.type === "diagram") {
-      // Standalone diagram (legacy).
-      let path = (doc as DiagramDoc).path || currentFilePath;
-      if (!path) {
-        path = await bridge.saveFileDialog("Save diagram", "schema.diagram", "Diagram", "*.diagram");
-        if (!path) return false;
-        currentFilePath = path;
-      }
-      await bridge.saveFile(path, JSON.stringify(store.getDiagram()));
-      store.clearDirty();
-      (doc as DiagramDoc).path = path;
-      (doc as DiagramDoc).label = path.split(/[/\\]/).pop() ?? "Untitled";
-      addRecent({
-        path,
-        kind: "diagram",
-        label: (doc as DiagramDoc).label,
-        lastOpened: Date.now(),
-      });
-      refreshTabStrip();
-      appendStatus(`Saved ${path}`);
-      return true;
-    }
-    return false;
-  } catch (e) {
-    showToast("Save failed: " + (e as Error).message);
-    return false;
-  }
-}
-
-/** Save current diagram to a new path (Save As). Returns true if saved. */
-async function saveDiagramAs(): Promise<boolean> {
-  if (!bridge.isBackendAvailable()) {
-    showToast("Backend not available (run in Wails)");
-    return false;
-  }
-  const defaultName = currentFilePath?.split(/[/\\]/).pop() ?? "schema.diagram";
-  let path: string;
-  try {
-    path = await bridge.saveFileDialog(
-      "Save diagram as",
-      defaultName,
-      "Diagram",
-      "*.diagram"
-    );
-  } catch (e) {
-    showToast("Save failed: " + (e as Error).message);
-    return false;
-  }
-  if (!path) return false;
-  try {
-    const doc = getActiveDoc();
-    if (doc?.type === "workspace") {
-      const w = doc as WorkspaceDoc;
-      await syncDiagramRelationshipsToCatalog(w, store.getDiagram());
-    }
-    await bridge.saveFile(path, JSON.stringify(store.getDiagram()));
+      await wsSaveDiagram(w, inner);
+      // If autoSaveGeneration changed during the await, new edits arrived;
+      // loop again to save the latest state.
+    } while (gen !== autoSaveGeneration);
     store.clearDirty();
-    currentFilePath = path;
-    if (doc && doc.type === "diagram") {
-      (doc as DiagramDoc).path = path;
-      (doc as DiagramDoc).label = path.split(/[/\\]/).pop() ?? "Untitled";
-      addRecent({
-        path,
-        kind: "diagram",
-        label: (doc as DiagramDoc).label,
-        lastOpened: Date.now(),
-      });
-      refreshTabStrip();
-    } else if (doc && doc.type === "workspace") {
-      const w = doc as WorkspaceDoc;
-      const inner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
-      if (inner) {
-        inner.path = path;
-        inner.label =
-          path
-            .split(/[/\\]/)
-            .pop()
-            ?.replace(/\.diagram$/i, "") ?? "Diagram";
-        refreshTabStrip();
-        renderWorkspaceView();
-      }
-    }
-    appendStatus(`Saved as ${path}`);
-    showToast("Saved");
-    return true;
-  } catch (e) {
-    showToast("Save failed: " + (e as Error).message);
-    return false;
+    refreshTabStrip();
+    if (workspacePanelEl) renderWorkspaceView();
+    appendStatus("Auto-saved");
+  } catch {
+    showToast("Auto-save failed");
   }
 }
 
@@ -1104,19 +1009,16 @@ function confirmUnsavedChanges(
 }
 
 /**
- * Exit the application, prompting to save any diagrams with unsaved changes.
- * If the user cancels at any prompt the exit is aborted.
+ * Exit the application.
+ * Workspace diagrams are auto-saved continuously, so we just flush any remaining
+ * dirty workspace tabs as a safety net. Standalone diagrams still prompt.
  */
 async function exitApp(): Promise<void> {
-  // Helper: prompt-and-save dirty inner diagram tabs in a workspace.
-  async function saveWorkspaceDirtyTabs(w: WorkspaceDoc): Promise<boolean> {
+  // Helper: flush-save any remaining dirty workspace diagram tabs (safety net).
+  async function flushWorkspaceDirtyTabs(w: WorkspaceDoc): Promise<void> {
     for (const inner of w.innerDiagramTabs) {
       if (!inner.store.isDirty()) continue;
-      const choice = await confirmUnsavedChanges(
-        `Save changes to "${inner.label}" in workspace "${w.name || w.label}" before exiting?`
-      );
-      if (choice === "cancel") return false;
-      if (choice === "save") {
+      try {
         await syncDiagramRelationshipsToCatalog(w, inner.store.getDiagram());
         if (inner.diagramId) {
           await wsSaveDiagram(w, inner);
@@ -1127,14 +1029,15 @@ async function exitApp(): Promise<void> {
           );
         }
         inner.store.clearDirty();
+      } catch {
+        // Best-effort on exit.
       }
     }
-    return true;
   }
 
   // 1. Handle the currentWorkspace (set when a workspace is the full-app focus).
   if (currentWorkspace) {
-    if (!(await saveWorkspaceDirtyTabs(currentWorkspace))) return;
+    await flushWorkspaceDirtyTabs(currentWorkspace);
   }
 
   // 2. Handle standalone diagram tabs and any workspace docs in the documents array.
@@ -1162,8 +1065,7 @@ async function exitApp(): Promise<void> {
         }
       }
     } else if (doc.type === "workspace") {
-      // Workspace docs can also appear in the documents array in some flows.
-      if (!(await saveWorkspaceDirtyTabs(doc as WorkspaceDoc))) return;
+      await flushWorkspaceDirtyTabs(doc as WorkspaceDoc);
     }
   }
 
@@ -1205,24 +1107,6 @@ function setupToolbar(): void {
   newBtn.title = "Add table to diagram";
   newBtn.onclick = () => addTableFromToolbar();
   toolbar.appendChild(newBtn);
-
-  const saveBtn = document.createElement("button");
-  saveBtn.textContent = "Save";
-  saveBtn.title = "Save diagram";
-  saveBtn.onclick = async () => {
-    const saved = await saveDiagram();
-    if (saved) showToast("Saved");
-  };
-  toolbar.appendChild(saveBtn);
-
-  const saveAsBtn = document.createElement("button");
-  saveAsBtn.textContent = "Save As…";
-  saveAsBtn.title = "Save diagram to a new file";
-  saveAsBtn.onclick = async () => {
-    const saved = await saveDiagramAs();
-    if (saved) showToast("Saved");
-  };
-  toolbar.appendChild(saveAsBtn);
 
   const undoBtn = document.createElement("button");
   undoBtn.textContent = "Undo";
@@ -1268,10 +1152,6 @@ function setupToolbar(): void {
       unsubscribeStore();
       unsubscribeStore = null;
     }
-    if (autoSaveTimeoutId) {
-      clearTimeout(autoSaveTimeoutId);
-      autoSaveTimeoutId = null;
-    }
     unsubscribeStore = store.subscribe(() => {
       undoBtn.disabled = !store.canUndo();
       redoBtn.disabled = !store.canRedo();
@@ -1282,31 +1162,13 @@ function setupToolbar(): void {
         const inner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
         if (inner && inner.store === store) updateWorkspaceInnerTabLabels();
       }
-      if (
-        doc?.type === "workspace" &&
-        (doc as WorkspaceDoc).autoSaveDiagrams &&
-        store.isDirty()
-      ) {
-        const w = doc as WorkspaceDoc;
-        const inner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
-        if (inner && inner.store === store) {
-          if (autoSaveTimeoutId) clearTimeout(autoSaveTimeoutId);
-          autoSaveTimeoutId = setTimeout(() => {
-            autoSaveTimeoutId = null;
-            syncDiagramRelationshipsToCatalog(w, store.getDiagram())
-              .then(() =>
-                inner.diagramId
-                  ? wsSaveDiagram(w, inner)
-                  : bridge.saveFile(inner.path, JSON.stringify(store.getDiagram()))
-              )
-              .then(() => {
-                store.clearDirty();
-                refreshTabStrip();
-                if (workspacePanelEl) renderWorkspaceView();
-                appendStatus("Auto-saved");
-              })
-              .catch(() => showToast("Auto-save failed"));
-          }, AUTO_SAVE_DELAY_MS);
+      // Auto-save immediately whenever the store is dirty.
+      if (doc?.type === "workspace" && store.isDirty()) {
+        autoSaveGeneration++;
+        if (!autoSaveInFlight) {
+          autoSaveInFlight = autoSaveActiveDiagram().finally(() => {
+            autoSaveInFlight = null;
+          });
         }
       }
     });
@@ -3500,9 +3362,7 @@ function setupCanvas(): void {
     }
     if (e.key === "s" && e.ctrlKey) {
       e.preventDefault();
-      saveDiagram().then((saved) => {
-        if (saved) showToast("Saved");
-      });
+      // Auto-save handles all persistence; Ctrl+S is a no-op.
     }
     if (e.key === "t" && e.ctrlKey) {
       e.preventDefault();
@@ -5496,7 +5356,6 @@ async function wsSaveSettings(w: WorkspaceDoc): Promise<void> {
   const settings: import("./types").WsSettings = {
     name: w.name,
     description: w.description,
-    autoSaveDiagrams: w.autoSaveDiagrams,
   };
   await bridge.saveWorkspaceSettings(w.workspaceId, JSON.stringify(settings));
 }
@@ -5690,7 +5549,6 @@ async function newWorkspaceTab(): Promise<void> {
     await bridge.saveWorkspaceSettings(result.workspaceId, JSON.stringify({
       name: label,
       description: "",
-      autoSaveDiagrams: false,
     }));
     const doc: WorkspaceDoc = {
       type: "workspace",
@@ -5705,7 +5563,6 @@ async function newWorkspaceTab(): Promise<void> {
       catalogRelationships: [],
       innerDiagramTabs: [],
       activeInnerDiagramIndex: -1,
-      autoSaveDiagrams: false,
       workspaceUIState: {
         catalogOpen: true,
         diagramsOpen: true,
@@ -5768,7 +5625,6 @@ async function openWorkspaceTab(path?: string): Promise<void> {
       catalogRelationships,
       innerDiagramTabs: [],
       activeInnerDiagramIndex: -1,
-      autoSaveDiagrams: result.settings.autoSaveDiagrams ?? false,
       workspaceUIState,
     };
     currentWorkspace = doc;
@@ -5835,10 +5691,6 @@ function showWorkspaceView(): void {
 }
 
 function bindActiveTab(): void {
-  if (autoSaveTimeoutId) {
-    clearTimeout(autoSaveTimeoutId);
-    autoSaveTimeoutId = null;
-  }
   const doc = getActiveDoc();
   if (doc && doc.type === "diagram") {
     store = doc.store;
@@ -5954,9 +5806,15 @@ async function closeTab(i: number): Promise<void> {
     const choice = await confirmUnsavedChanges();
     if (choice === "cancel") return;
     if (choice === "save") {
-      const saved = await saveDiagram();
-      if (!saved) return;
-      /* saveDiagram() already updates doc path and addRecent */
+      let path = (doc as DiagramDoc).path || currentFilePath;
+      if (!path) {
+        path = await bridge.saveFileDialog("Save diagram", "schema.diagram", "Diagram", "*.diagram");
+        if (!path) return;
+        currentFilePath = path;
+      }
+      await bridge.saveFile(path, JSON.stringify(store.getDiagram()));
+      store.clearDirty();
+      (doc as DiagramDoc).path = path;
     }
   }
   documents.splice(i, 1);
@@ -6328,19 +6186,6 @@ function renderWorkspaceView(): void {
   descInput.className = "workspace-settings-input";
   descInput.rows = 2;
   descInput.value = w.description ?? "";
-  const autoSaveLabel = document.createElement("label");
-  autoSaveLabel.style.display = "flex";
-  autoSaveLabel.style.alignItems = "center";
-  autoSaveLabel.style.gap = "0.5rem";
-  autoSaveLabel.style.marginBottom = "0.5rem";
-  autoSaveLabel.style.cursor = "pointer";
-  const autoSaveCheckbox = document.createElement("input");
-  autoSaveCheckbox.type = "checkbox";
-  autoSaveCheckbox.checked = w.autoSaveDiagrams ?? false;
-  autoSaveLabel.appendChild(autoSaveCheckbox);
-  const autoSaveText = document.createElement("span");
-  autoSaveText.textContent = "Auto-save diagrams";
-  autoSaveLabel.appendChild(autoSaveText);
   const saveSettingsBtn = document.createElement("button");
   saveSettingsBtn.type = "button";
   saveSettingsBtn.textContent = "Save";
@@ -6348,14 +6193,12 @@ function renderWorkspaceView(): void {
     saveWorkspaceSettingsFromModal(
       w,
       nameInput.value,
-      descInput.value,
-      autoSaveCheckbox.checked
+      descInput.value
     );
   settingsContent.appendChild(nameLabel);
   settingsContent.appendChild(nameInput);
   settingsContent.appendChild(descLabel);
   settingsContent.appendChild(descInput);
-  settingsContent.appendChild(autoSaveLabel);
   settingsContent.appendChild(saveSettingsBtn);
   settingsAccordion.appendChild(settingsContent);
   sidebar.appendChild(settingsAccordion);
@@ -6912,7 +6755,8 @@ function switchWorkspaceInnerTab(w: WorkspaceDoc, index: number): void {
   if (index === w.activeInnerDiagramIndex) return;
   persistViewportToStore();
   const leavingInner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
-  if (leavingInner && w.autoSaveDiagrams && leavingInner.store.isDirty()) {
+  // Flush-save the leaving tab if still dirty (safety net; auto-save should have saved it).
+  if (leavingInner && leavingInner.store.isDirty()) {
     const diagram = leavingInner.store.getDiagram();
     syncDiagramRelationshipsToCatalog(w, diagram)
       .then(() =>
@@ -6924,7 +6768,6 @@ function switchWorkspaceInnerTab(w: WorkspaceDoc, index: number): void {
         leavingInner.store.clearDirty();
         refreshTabStrip();
         if (workspacePanelEl) renderWorkspaceView();
-        appendStatus("Auto-saved");
       })
       .catch(() => showToast("Auto-save failed"));
   }
@@ -6941,22 +6784,21 @@ async function closeWorkspaceInnerTab(
 ): Promise<void> {
   const inner = w.innerDiagramTabs[index];
   if (!inner) return;
+  // Flush-save if still dirty (safety net; auto-save should have saved it).
   if (inner.store.isDirty()) {
-    store = inner.store;
-    currentFilePath = inner.path;
-    const choice = await confirmUnsavedChanges();
-    if (choice === "cancel") return;
-    if (choice === "save") {
+    try {
       await syncDiagramRelationshipsToCatalog(w, inner.store.getDiagram());
       if (inner.diagramId) {
         await wsSaveDiagram(w, inner);
-      } else {
+      } else if (inner.path) {
         await bridge.saveFile(
           inner.path,
           JSON.stringify(inner.store.getDiagram())
         );
       }
       inner.store.clearDirty();
+    } catch {
+      // Best-effort on close.
     }
   }
   w.innerDiagramTabs.splice(index, 1);
@@ -6974,12 +6816,10 @@ async function closeWorkspaceInnerTab(
 async function saveWorkspaceSettingsFromModal(
   w: WorkspaceDoc,
   name: string,
-  description: string,
-  autoSaveDiagrams: boolean
+  description: string
 ): Promise<void> {
   w.name = name;
   w.description = description;
-  w.autoSaveDiagrams = autoSaveDiagrams;
   await wsSaveSettings(w);
   w.label = name || w.label;
   refreshTabStrip();
@@ -7024,18 +6864,6 @@ function showWorkspaceSettingsModal(w: WorkspaceDoc): void {
   descInput.rows = 3;
   descInput.value = w.description ?? "";
   contentDiv.appendChild(descInput);
-  const autoSaveLabel = document.createElement("label");
-  autoSaveLabel.className = "modal-checkbox-row";
-  autoSaveLabel.style.cursor = "pointer";
-  const autoSaveCheckbox = document.createElement("input");
-  autoSaveCheckbox.type = "checkbox";
-  autoSaveCheckbox.checked = w.autoSaveDiagrams ?? false;
-  autoSaveLabel.appendChild(autoSaveCheckbox);
-  const autoSaveText = document.createElement("span");
-  autoSaveText.textContent =
-    " Auto-save diagrams (within 5 seconds of changes)";
-  autoSaveLabel.appendChild(autoSaveText);
-  contentDiv.appendChild(autoSaveLabel);
   panel.appendChild(contentDiv);
 
   // --- Clear Table Catalog section ---
@@ -7103,9 +6931,8 @@ function showWorkspaceSettingsModal(w: WorkspaceDoc): void {
   saveBtn.onclick = async () => {
     const name = nameInput.value.trim();
     const description = descInput.value.trim();
-    const autoSaveDiagrams = autoSaveCheckbox.checked;
     overlay.remove();
-    await saveWorkspaceSettingsFromModal(w, name, description, autoSaveDiagrams);
+    await saveWorkspaceSettingsFromModal(w, name, description);
     if (workspacePanelEl) renderWorkspaceView();
   };
   footerDiv.appendChild(cancelBtn);
@@ -7847,7 +7674,6 @@ function setupMenuBar(menuBar: HTMLElement): void {
     ["New Workspace", () => newWorkspaceTab(), false],
     ["Open Workspace", () => openWorkspaceTab(), false],
     null,
-    ["Save", () => saveDiagram().then((s) => s && showToast("Saved")), false],
     ["Close Diagram", () => closeActiveDiagram(), false],
     ["Close Workspace", () => closeWorkspaceTab(), false],
     ["Close All Diagrams", () => closeAllDiagramTabs(), false],

@@ -2,10 +2,9 @@ package workspace
 
 // WorkspaceSettings holds workspace-level configuration as key-value pairs.
 type WorkspaceSettings struct {
-	Name             string `json:"name"`
-	Description      string `json:"description,omitempty"`
-	AutoSaveDiagrams bool   `json:"autoSaveDiagrams,omitempty"`
-	NotationStyle    string `json:"notationStyle,omitempty"`
+	Name          string `json:"name"`
+	Description   string `json:"description,omitempty"`
+	NotationStyle string `json:"notationStyle,omitempty"`
 }
 
 // CatalogTable is a table in the workspace table catalog.

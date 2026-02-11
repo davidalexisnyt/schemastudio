@@ -145,7 +145,6 @@ export interface DiagramSummary {
 export interface WsSettings {
   name: string;
   description?: string;
-  autoSaveDiagrams?: boolean;
   notationStyle?: string;
 }
 
@@ -294,8 +293,6 @@ export interface RecentEntry {
 export interface WorkspaceConfig {
   name: string;
   description?: string;
-  /** When true, save diagrams automatically. */
-  autoSaveDiagrams?: boolean;
 }
 
 /** Table in catalog (id is the stable catalog id; compatible with Table). */

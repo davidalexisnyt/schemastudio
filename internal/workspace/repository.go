@@ -64,8 +64,6 @@ func (r *WorkspaceRepo) GetAllSettings() (WorkspaceSettings, error) {
 			s.Name = v
 		case "description":
 			s.Description = v
-		case "auto_save_diagrams":
-			s.AutoSaveDiagrams = v == "true"
 		case "notation_style":
 			s.NotationStyle = v
 		}
@@ -86,13 +84,6 @@ func (r *WorkspaceRepo) SaveAllSettings(s WorkspaceSettings) error {
 		return err
 	}
 	if _, err := tx.Exec(upsert, "description", s.Description); err != nil {
-		return err
-	}
-	autoSave := "false"
-	if s.AutoSaveDiagrams {
-		autoSave = "true"
-	}
-	if _, err := tx.Exec(upsert, "auto_save_diagrams", autoSave); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(upsert, "notation_style", s.NotationStyle); err != nil {
