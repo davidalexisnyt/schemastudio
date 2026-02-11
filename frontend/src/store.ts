@@ -139,11 +139,7 @@ export class Store {
     catalogTableId?: string
   ): Table {
     this.pushUndo();
-    const idAlreadyUsed = catalogTableId
-      ? this.diagram.tables.some((t) => t.id === catalogTableId)
-      : false;
-    const tableId =
-      catalogTableId && !idAlreadyUsed ? catalogTableId : nextId("t");
+    const tableId = nextId("t");
     const t: Table = {
       id: tableId,
       name,
