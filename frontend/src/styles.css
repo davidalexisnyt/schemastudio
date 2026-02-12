@@ -1336,11 +1336,7 @@ body {
   overflow: auto;
   min-height: 0;
   margin: 0 -0.25rem;
-  padding: 0 0.25rem;
-}
-
-.modal-panel-new-diagram .modal-workspace-settings-content {
-  padding-bottom: 1rem;
+  padding: 0 0.25rem 0.75rem;
 }
 
 .modal-panel-workspace-settings .modal-workspace-settings-footer {

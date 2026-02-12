@@ -6391,35 +6391,95 @@ async function renameWorkspaceDiagramFile(
   }
 }
 
-/** Rename a SQLite-backed workspace diagram. */
-async function renameWorkspaceDiagram(
+/** Show a modal dialog to rename a SQLite-backed workspace diagram. */
+function renameWorkspaceDiagram(
   w: WorkspaceDoc,
   diagramId: string,
   currentName: string
-): Promise<void> {
+): void {
   if (!bridge.isBackendAvailable()) {
     showToast("Backend not available");
     return;
   }
-  const raw = window.prompt("Rename diagram", currentName);
-  if (raw == null || raw.trim() === "" || raw.trim() === currentName) return;
-  const newName = raw.trim();
-  try {
-    // Load the full diagram from SQLite, update its name, and save it back.
-    const json = await bridge.getDiagram(w.workspaceId, diagramId);
-    const wsDiagram = JSON.parse(json) as import("./types").WsDiagram;
-    wsDiagram.name = newName;
-    await bridge.saveDiagram(w.workspaceId, JSON.stringify(wsDiagram));
-    // Update the open tab label if this diagram is currently open.
-    const tab = w.innerDiagramTabs.find((t) => t.diagramId === diagramId);
-    if (tab) tab.label = newName;
-    renderWorkspaceView();
-    refreshTabStrip();
-    appendStatus(`Renamed diagram to "${newName}"`);
-    showToast("Renamed");
-  } catch (e) {
-    showToast("Rename failed: " + (e as Error).message);
-  }
+
+  const existing = document.querySelector(".modal-overlay");
+  if (existing) existing.remove();
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  const panel = document.createElement("div");
+  panel.className =
+    "modal-panel modal-panel-workspace-settings modal-panel-rename-diagram";
+
+  const headerDiv = document.createElement("div");
+  headerDiv.className = "modal-workspace-settings-header";
+  const title = document.createElement("h2");
+  title.className = "modal-title";
+  title.textContent = "Rename Diagram";
+  headerDiv.appendChild(title);
+  panel.appendChild(headerDiv);
+
+  const contentDiv = document.createElement("div");
+  contentDiv.className = "modal-workspace-settings-content";
+  const nameLabel = document.createElement("label");
+  nameLabel.textContent = "Diagram name";
+  nameLabel.htmlFor = "rename-diagram-name";
+  contentDiv.appendChild(nameLabel);
+  const nameInput = document.createElement("input");
+  nameInput.id = "rename-diagram-name";
+  nameInput.type = "text";
+  nameInput.value = currentName;
+  nameInput.className = "modal-input";
+  nameInput.placeholder = "e.g. diagram, my-schema";
+  contentDiv.appendChild(nameInput);
+  panel.appendChild(contentDiv);
+
+  const footerDiv = document.createElement("div");
+  footerDiv.className = "modal-workspace-settings-footer";
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.textContent = "Cancel";
+  cancelBtn.onclick = () => overlay.remove();
+  const renameBtn = document.createElement("button");
+  renameBtn.type = "button";
+  renameBtn.textContent = "Rename";
+  renameBtn.onclick = async () => {
+    const newName = nameInput.value.trim();
+    if (!newName || newName === currentName) {
+      overlay.remove();
+      return;
+    }
+    overlay.remove();
+    try {
+      // Load the full diagram from SQLite, update its name, and save it back.
+      const json = await bridge.getDiagram(w.workspaceId, diagramId);
+      const wsDiagram = JSON.parse(json) as import("./types").WsDiagram;
+      wsDiagram.name = newName;
+      await bridge.saveDiagram(w.workspaceId, JSON.stringify(wsDiagram));
+      // Update the open tab label if this diagram is currently open.
+      const tab = w.innerDiagramTabs.find((t) => t.diagramId === diagramId);
+      if (tab) tab.label = newName;
+      renderWorkspaceView();
+      refreshTabStrip();
+      appendStatus(`Renamed diagram to "${newName}"`);
+      showToast("Renamed");
+    } catch (e) {
+      showToast("Rename failed: " + (e as Error).message);
+    }
+  };
+  nameInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      renameBtn.click();
+    }
+  });
+  footerDiv.appendChild(cancelBtn);
+  footerDiv.appendChild(renameBtn);
+  panel.appendChild(footerDiv);
+
+  overlay.appendChild(panel);
+  document.body.appendChild(overlay);
+  nameInput.focus();
+  nameInput.select();
 }
 
 /** List diagram summaries from the workspace SQLite database. */
