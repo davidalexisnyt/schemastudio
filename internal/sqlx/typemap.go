@@ -143,7 +143,7 @@ func pgDefaultType(gt string, length, precision, scale *int) string {
 		if length != nil && *length > 0 {
 			return fmt.Sprintf("varchar(%d)", *length)
 		}
-		return "text"
+		return "varchar"
 	case "integer":
 		return "integer"
 	case "float":
@@ -179,7 +179,7 @@ func mysqlDefaultType(gt string, length, precision, scale *int) string {
 		if length != nil && *length > 0 {
 			return fmt.Sprintf("varchar(%d)", *length)
 		}
-		return "text"
+		return "varchar"
 	case "integer":
 		return "int"
 	case "float":

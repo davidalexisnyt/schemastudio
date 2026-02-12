@@ -944,19 +944,18 @@ async function autoSaveActiveDiagram(): Promise<void> {
   if (doc?.type !== "workspace") return;
   const w = doc as WorkspaceDoc;
   const inner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
-  if (!inner || !inner.diagramId || inner.store !== store) return;
+  if (!inner || (!inner.diagramId && !inner.path) || inner.store !== store) return;
+  const tabToSave = inner;
   try {
     let gen: number;
     do {
       gen = autoSaveGeneration;
-      await syncDiagramRelationshipsToCatalog(w, store.getDiagram());
-      await wsSaveDiagram(w, inner);
+      await saveWorkspaceDiagramTab(w, tabToSave);
       // If autoSaveGeneration changed during the await, new edits arrived;
       // loop again to save the latest state.
     } while (gen !== autoSaveGeneration);
-    store.clearDirty();
     refreshTabStrip();
-    if (workspacePanelEl) renderWorkspaceView();
+    updateWorkspaceInnerTabLabels();
     appendStatus("Auto-saved");
   } catch {
     showToast("Auto-save failed");
@@ -1019,16 +1018,7 @@ async function exitApp(): Promise<void> {
     for (const inner of w.innerDiagramTabs) {
       if (!inner.store.isDirty()) continue;
       try {
-        await syncDiagramRelationshipsToCatalog(w, inner.store.getDiagram());
-        if (inner.diagramId) {
-          await wsSaveDiagram(w, inner);
-        } else if (inner.path) {
-          await bridge.saveFile(
-            inner.path,
-            JSON.stringify(inner.store.getDiagram())
-          );
-        }
-        inner.store.clearDirty();
+        await saveWorkspaceDiagramTab(w, inner);
       } catch {
         // Best-effort on exit.
       }
@@ -1474,6 +1464,21 @@ async function exportMermaid(): Promise<void> {
   );
   if (path) {
     await bridge.saveFile(path, mm);
+    showToast("Exported");
+  }
+}
+
+async function exportPlantUML(): Promise<void> {
+  if (!bridge.isBackendAvailable()) throw new Error("Backend not available");
+  const puml = await bridge.exportPlantUML(JSON.stringify(store.getDiagram()));
+  const path = await bridge.saveFileDialog(
+    "Export PlantUML",
+    "schema.puml",
+    "PlantUML",
+    "*.puml"
+  );
+  if (path) {
+    await bridge.saveFile(path, puml);
     showToast("Exported");
   }
 }
@@ -2558,7 +2563,7 @@ async function openDatabaseConnectionDialog(): Promise<void> {
         bindActiveTab();
         refreshTabStrip();
         updateEditorContentVisibility();
-        renderWorkspaceView();
+        updateWorkspaceCatalogList(w);
         appendStatus(
           `Imported from database: ${catalog.tables.length} tables, ${relationships.length} relationships`
         );
@@ -2677,7 +2682,7 @@ async function openAndImportSQL(): Promise<void> {
       bindActiveTab();
       refreshTabStrip();
       updateEditorContentVisibility();
-      renderWorkspaceView();
+      updateWorkspaceCatalogList(w);
       appendStatus(
         `Imported SQL to catalog: ${catalog.tables.length} tables, ${relationships.length} relationships`
       );
@@ -2744,7 +2749,7 @@ async function openAndImportCSV(): Promise<void> {
       bindActiveTab();
       refreshTabStrip();
       updateEditorContentVisibility();
-      renderWorkspaceView();
+      updateWorkspaceCatalogList(w);
       appendStatus(`Imported CSV to catalog: ${catalog.tables.length} tables`);
       showToast("Imported CSV to catalog");
     } else {
@@ -3764,18 +3769,78 @@ function showTableEditor(tableId: string): void {
   function renderRelationships(): void {
     relContainer.innerHTML = "";
     const diagram = store.getDiagram();
-    const rels = diagram.relationships.filter(
-      (r) => r.sourceTableId === tableId || r.targetTableId === tableId
-    );
     const currentTable = diagram.tables.find((x) => x.id === tableId)!;
+    const doc = getActiveDoc();
+    const catalogId = t?.catalogTableId;
+    const useCatalogRels =
+      doc?.type === "workspace" && catalogId;
+    const w = doc?.type === "workspace" ? (doc as WorkspaceDoc) : null;
 
-    rels.forEach((r) => {
-      const otherTableId =
-        r.sourceTableId === tableId ? r.targetTableId : r.sourceTableId;
-      const otherT = diagram.tables.find((x) => x.id === otherTableId);
-      if (!otherT) return;
-      const otherTable = otherT;
-      const weAreSource = r.sourceTableId === tableId;
+    if (useCatalogRels && w && catalogId) {
+      const catalogRels = w.catalogRelationships.filter(
+        (cr) =>
+          cr.sourceCatalogTableId === catalogId ||
+          cr.targetCatalogTableId === catalogId
+      );
+      catalogRels.forEach((catRel) => {
+        const weAreSource = catRel.sourceCatalogTableId === catalogId;
+        const otherCatalogId = weAreSource
+          ? catRel.targetCatalogTableId
+          : catRel.sourceCatalogTableId;
+        const otherEntry = w.catalogTables.find((c) => c.id === otherCatalogId);
+        const otherName = otherEntry?.name ?? "Unknown";
+        const card = document.createElement("div");
+        card.className = "modal-relationship-card";
+        const cardHeader = document.createElement("div");
+        cardHeader.className = "modal-relationship-card-header";
+        const targetLabel = document.createElement("div");
+        targetLabel.className = "rel-target-name";
+        targetLabel.textContent = weAreSource
+          ? `Foreign: ${otherName}`
+          : `Primary: ${otherName}`;
+        cardHeader.appendChild(targetLabel);
+        const deleteRelBtn = document.createElement("button");
+        deleteRelBtn.type = "button";
+        deleteRelBtn.className =
+          "modal-field-delete-btn modal-relationship-delete";
+        deleteRelBtn.title = "Delete relationship";
+        deleteRelBtn.innerHTML = DELETE_ICON_SVG;
+        deleteRelBtn.onclick = () => {
+          const idx = w.catalogRelationships.findIndex((r) => r.id === catRel.id);
+          if (idx >= 0) {
+            w.catalogRelationships.splice(idx, 1);
+            removeCatalogRelationshipFromAllDiagrams(w, catRel.id);
+            bridge
+              .deleteCatalogRelationship(w.workspaceId, catRel.id)
+              .then(() => renderRelationships());
+          }
+        };
+        cardHeader.appendChild(deleteRelBtn);
+        card.appendChild(cardHeader);
+        const mapTable = document.createElement("table");
+        mapTable.className = "modal-relationship-table";
+        mapTable.innerHTML =
+          "<thead><tr><th>Source Field</th><th>Target Field</th></tr></thead><tbody></tbody>";
+        const mapTbody = mapTable.querySelector("tbody")!;
+        const srcName = weAreSource ? catRel.sourceFieldName : catRel.targetFieldName;
+        const tgtName = weAreSource ? catRel.targetFieldName : catRel.sourceFieldName;
+        const row = mapTbody.insertRow();
+        row.insertCell().textContent = srcName || "—";
+        row.insertCell().textContent = tgtName || "—";
+        card.appendChild(mapTable);
+        relContainer.appendChild(card);
+      });
+    } else {
+      const rels = diagram.relationships.filter(
+        (r) => r.sourceTableId === tableId || r.targetTableId === tableId
+      );
+      rels.forEach((r) => {
+        const otherTableId =
+          r.sourceTableId === tableId ? r.targetTableId : r.sourceTableId;
+        const otherT = diagram.tables.find((x) => x.id === otherTableId);
+        if (!otherT) return;
+        const otherTable = otherT;
+        const weAreSource = r.sourceTableId === tableId;
       const card = document.createElement("div");
       card.className = "modal-relationship-card";
       const cardHeader = document.createElement("div");
@@ -3905,7 +3970,8 @@ function showTableEditor(tableId: string): void {
       };
       card.appendChild(addRowBtn);
       relContainer.appendChild(card);
-    });
+      });
+    }
 
     const addBlock = document.createElement("div");
     addBlock.className = "modal-add-relationship-block";
@@ -4699,7 +4765,7 @@ function showCatalogTableEditor(w: WorkspaceDoc, catalogId: string): void {
       bindActiveTab();
       refreshTabStrip();
       updateEditorContentVisibility();
-      renderWorkspaceView();
+      updateWorkspaceCatalogList(w);
       const inner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
       if (inner) render();
     }
@@ -5934,6 +6000,200 @@ function updateEditorContentVisibility(): void {
   }
 }
 
+/** Populate a catalog list container with rows from w.catalogTables. Clears the list first. */
+function populateCatalogList(w: WorkspaceDoc, catalogList: HTMLElement): void {
+  catalogList.innerHTML = "";
+  const selectedCatalogIds = new Set<string>();
+  let lastClickedCatalogIdx = -1;
+
+  function updateCatalogSelection(): void {
+    catalogList.querySelectorAll<HTMLElement>(".workspace-catalog-item").forEach((el) => {
+      const id = el.dataset.catalogId ?? "";
+      el.classList.toggle("selected", selectedCatalogIds.has(id));
+    });
+  }
+
+  w.catalogTables.forEach((t, idx) => {
+    const row = document.createElement("div");
+    row.className = "workspace-catalog-item";
+    const label = document.createElement("span");
+    label.textContent = t.name;
+    label.className = "workspace-catalog-item-label";
+    row.appendChild(label);
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "workspace-catalog-item-delete";
+    deleteBtn.title = "Remove from catalog";
+    deleteBtn.innerHTML = TRASH_ICON_SVG;
+    deleteBtn.onclick = (e) => {
+      e.stopPropagation();
+      confirmRemoveCatalogTable(w, t.id, t.name).catch(() => {});
+    };
+    row.appendChild(deleteBtn);
+    row.draggable = true;
+    row.dataset.catalogId = t.id;
+
+    row.onmousedown = (e) => {
+      if ((e.target as Element).closest(".workspace-catalog-item-delete")) return;
+      if (e.button !== 0) return;
+      if (e.ctrlKey || e.metaKey) {
+        if (selectedCatalogIds.has(t.id)) selectedCatalogIds.delete(t.id);
+        else selectedCatalogIds.add(t.id);
+        lastClickedCatalogIdx = idx;
+      } else if (e.shiftKey && lastClickedCatalogIdx >= 0) {
+        const start = Math.min(lastClickedCatalogIdx, idx);
+        const end = Math.max(lastClickedCatalogIdx, idx);
+        for (let i = start; i <= end; i++) {
+          selectedCatalogIds.add(w.catalogTables[i].id);
+        }
+      } else {
+        selectedCatalogIds.clear();
+        selectedCatalogIds.add(t.id);
+        lastClickedCatalogIdx = idx;
+      }
+      updateCatalogSelection();
+    };
+
+    row.ondragstart = (e) => {
+      const ids = selectedCatalogIds.has(t.id) && selectedCatalogIds.size > 1
+        ? Array.from(selectedCatalogIds)
+        : [t.id];
+      e.dataTransfer?.setData("catalogTableId", ids.join(","));
+      if (e.dataTransfer) e.dataTransfer.effectAllowed = "copy";
+    };
+
+    row.ondblclick = () => openCatalogTableEditor(w, t.id);
+
+    row.oncontextmenu = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!selectedCatalogIds.has(t.id)) {
+        if (!e.ctrlKey && !e.metaKey) selectedCatalogIds.clear();
+        selectedCatalogIds.add(t.id);
+        lastClickedCatalogIdx = idx;
+        updateCatalogSelection();
+      }
+      showCatalogContextMenu(e.clientX, e.clientY, w, selectedCatalogIds);
+    };
+
+    catalogList.appendChild(row);
+  });
+
+  if (w.catalogTables.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "workspace-empty-msg";
+    empty.textContent = "No tables yet";
+    catalogList.appendChild(empty);
+  }
+}
+
+/** Update only the table catalog list in the left pane (e.g. after add/remove/rename). */
+function updateWorkspaceCatalogList(w: WorkspaceDoc): void {
+  if (!workspacePanelEl) return;
+  const list = workspacePanelEl.querySelector(".workspace-catalog-list");
+  if (!list) return;
+  populateCatalogList(w, list as HTMLElement);
+}
+
+/** Append diagram list rows to a container. Does not clear the container. */
+function buildDiagramListRows(
+  w: WorkspaceDoc,
+  diagramsList: HTMLElement,
+  diagrams: import("./types").DiagramSummary[]
+): void {
+  diagrams.forEach((diag) => {
+    const row = document.createElement("div");
+    row.className = "workspace-diagram-item";
+    const label = document.createElement("span");
+    label.className = "workspace-diagram-item-label";
+    label.textContent = diag.name;
+    row.appendChild(label);
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "workspace-diagram-item-delete";
+    deleteBtn.title = "Delete diagram";
+    deleteBtn.innerHTML = TRASH_ICON_SVG;
+    deleteBtn.onclick = (e) => {
+      e.stopPropagation();
+      confirmDeleteDiagramById(w, diag.id, diag.name);
+    };
+    row.appendChild(deleteBtn);
+    row.onclick = (e) => {
+      if (!(e.target as Element).closest(".workspace-diagram-item-delete")) {
+        openWorkspaceDiagramById(w, diag.id, diag.name);
+      }
+    };
+    row.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      showDiagramListContextMenu(e, w, diag.name, diag.id);
+    });
+    diagramsList.appendChild(row);
+  });
+  if (diagrams.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "workspace-empty-msg";
+    empty.textContent = "No diagram files";
+    diagramsList.appendChild(empty);
+  }
+}
+
+/** Update only the diagram list in the left pane (e.g. after new diagram or rename). */
+function updateWorkspaceDiagramList(w: WorkspaceDoc): void {
+  if (!workspacePanelEl) return;
+  const list = workspacePanelEl.querySelector(".workspace-diagrams-list");
+  if (!list) return;
+  const listEl = list as HTMLElement;
+  listEl.innerHTML = "";
+  loadWorkspaceDiagramList(w).then((diagrams) => {
+    buildDiagramListRows(w, listEl, diagrams);
+  });
+}
+
+/** Rebuild only the main area (inner tab strip + diagram container). Preserves sidebar. */
+function renderWorkspaceMain(w: WorkspaceDoc): void {
+  if (!workspacePanelEl) return;
+  const layout = workspacePanelEl.querySelector(".workspace-layout");
+  const main = layout?.querySelector(".workspace-main");
+  if (!main) return;
+  main.innerHTML = "";
+
+  const innerTabStrip = document.createElement("div");
+  innerTabStrip.className = "workspace-inner-tabs";
+  w.innerDiagramTabs.forEach((inner, i) => {
+    const tab = document.createElement("div");
+    const dirty = inner.store.isDirty();
+    tab.className =
+      "workspace-inner-tab" +
+      (i === w.activeInnerDiagramIndex ? " workspace-inner-tab-active" : "") +
+      (dirty ? " workspace-inner-tab-dirty" : "");
+    tab.textContent = inner.label + (dirty ? " •" : "");
+    tab.title = dirty ? "Unsaved changes" : "";
+    tab.onclick = () => switchWorkspaceInnerTab(w, i);
+    const closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.className = "workspace-inner-tab-close";
+    closeBtn.innerHTML = "×";
+    closeBtn.onclick = (e) => {
+      e.stopPropagation();
+      closeWorkspaceInnerTab(w, i);
+    };
+    tab.appendChild(closeBtn);
+    innerTabStrip.appendChild(tab);
+  });
+  main.appendChild(innerTabStrip);
+
+  const diagramContainer = document.createElement("div");
+  diagramContainer.className = "workspace-diagram-container";
+  if (w.innerDiagramTabs.length === 0 || w.activeInnerDiagramIndex < 0) {
+    const noDiagram = document.createElement("div");
+    noDiagram.className = "workspace-no-diagram";
+    noDiagram.textContent = "Open a diagram from the list or create a new one.";
+    diagramContainer.appendChild(noDiagram);
+  }
+  main.appendChild(diagramContainer);
+  reattachWorkspaceDiagramPanel();
+}
+
 function renderWorkspaceView(): void {
   const doc = getActiveDoc();
   if (!workspacePanelEl || doc?.type !== "workspace") return;
@@ -6000,104 +6260,14 @@ function renderWorkspaceView(): void {
   catalogContent.className = "workspace-accordion-content";
   const catalogList = document.createElement("div");
   catalogList.className = "workspace-catalog-list";
-  const selectedCatalogIds = new Set<string>();
-  let lastClickedCatalogIdx = -1;
-
-  function updateCatalogSelection(): void {
-    catalogList.querySelectorAll<HTMLElement>(".workspace-catalog-item").forEach((el) => {
-      const id = el.dataset.catalogId ?? "";
-      el.classList.toggle("selected", selectedCatalogIds.has(id));
-    });
-  }
-
-  w.catalogTables.forEach((t, idx) => {
-    const row = document.createElement("div");
-    row.className = "workspace-catalog-item";
-    const label = document.createElement("span");
-    label.textContent = t.name;
-    label.className = "workspace-catalog-item-label";
-    row.appendChild(label);
-    const deleteBtn = document.createElement("button");
-    deleteBtn.type = "button";
-    deleteBtn.className = "workspace-catalog-item-delete";
-    deleteBtn.title = "Remove from catalog";
-    deleteBtn.innerHTML = TRASH_ICON_SVG;
-    deleteBtn.onclick = (e) => {
-      e.stopPropagation();
-      confirmRemoveCatalogTable(w, t.id, t.name).catch(() => {});
-    };
-    row.appendChild(deleteBtn);
-    row.draggable = true;
-    row.dataset.catalogId = t.id;
-
-    // Selection handling: click, ctrl+click, shift+click
-    row.onmousedown = (e) => {
-      // Ignore if clicking on the delete button
-      if ((e.target as Element).closest(".workspace-catalog-item-delete")) return;
-      if (e.button !== 0) return;
-      if (e.ctrlKey || e.metaKey) {
-        // Toggle selection
-        if (selectedCatalogIds.has(t.id)) selectedCatalogIds.delete(t.id);
-        else selectedCatalogIds.add(t.id);
-        lastClickedCatalogIdx = idx;
-      } else if (e.shiftKey && lastClickedCatalogIdx >= 0) {
-        // Range select
-        const start = Math.min(lastClickedCatalogIdx, idx);
-        const end = Math.max(lastClickedCatalogIdx, idx);
-        for (let i = start; i <= end; i++) {
-          selectedCatalogIds.add(w.catalogTables[i].id);
-        }
-      } else {
-        // Single select
-        selectedCatalogIds.clear();
-        selectedCatalogIds.add(t.id);
-        lastClickedCatalogIdx = idx;
-      }
-      updateCatalogSelection();
-    };
-
-    row.ondragstart = (e) => {
-      // If dragging a selected item, drag all selected; otherwise just this one
-      const ids = selectedCatalogIds.has(t.id) && selectedCatalogIds.size > 1
-        ? Array.from(selectedCatalogIds)
-        : [t.id];
-      e.dataTransfer?.setData("catalogTableId", ids.join(","));
-      if (e.dataTransfer) e.dataTransfer.effectAllowed = "copy";
-    };
-
-    row.ondblclick = () => openCatalogTableEditor(w, t.id);
-
-    // Right-click context menu
-    row.oncontextmenu = (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      // Ensure this item is selected
-      if (!selectedCatalogIds.has(t.id)) {
-        if (!e.ctrlKey && !e.metaKey) selectedCatalogIds.clear();
-        selectedCatalogIds.add(t.id);
-        lastClickedCatalogIdx = idx;
-        updateCatalogSelection();
-      }
-      showCatalogContextMenu(e.clientX, e.clientY, w, selectedCatalogIds);
-    };
-
-    catalogList.appendChild(row);
-  });
-
-  // Click on empty space in list clears selection
+  populateCatalogList(w, catalogList);
   catalogList.addEventListener("mousedown", (e) => {
     if (e.target === catalogList) {
-      selectedCatalogIds.clear();
-      updateCatalogSelection();
+      catalogList.querySelectorAll<HTMLElement>(".workspace-catalog-item").forEach((el) => {
+        el.classList.remove("selected");
+      });
     }
   });
-
-  if (w.catalogTables.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "workspace-empty-msg";
-    empty.textContent = "No tables yet";
-    catalogList.appendChild(empty);
-  }
   catalogContent.appendChild(catalogList);
   catalogAccordion.appendChild(catalogContent);
   sidebar.appendChild(catalogAccordion);
@@ -6115,40 +6285,7 @@ function renderWorkspaceView(): void {
   const diagramsList = document.createElement("div");
   diagramsList.className = "workspace-diagrams-list";
   loadWorkspaceDiagramList(w).then((diagrams) => {
-    diagrams.forEach((diag) => {
-      const row = document.createElement("div");
-      row.className = "workspace-diagram-item";
-      const label = document.createElement("span");
-      label.className = "workspace-diagram-item-label";
-      label.textContent = diag.name;
-      row.appendChild(label);
-      const deleteBtn = document.createElement("button");
-      deleteBtn.type = "button";
-      deleteBtn.className = "workspace-diagram-item-delete";
-      deleteBtn.title = "Delete diagram";
-      deleteBtn.innerHTML = TRASH_ICON_SVG;
-      deleteBtn.onclick = (e) => {
-        e.stopPropagation();
-        confirmDeleteDiagramById(w, diag.id, diag.name);
-      };
-      row.appendChild(deleteBtn);
-      row.onclick = (e) => {
-        if (!(e.target as Element).closest(".workspace-diagram-item-delete")) {
-          openWorkspaceDiagramById(w, diag.id, diag.name);
-        }
-      };
-      row.addEventListener("contextmenu", (e) => {
-        e.preventDefault();
-        showDiagramListContextMenu(e, w, diag.name, diag.id);
-      });
-      diagramsList.appendChild(row);
-    });
-    if (diagrams.length === 0) {
-      const empty = document.createElement("div");
-      empty.className = "workspace-empty-msg";
-      empty.textContent = "No diagram files";
-      diagramsList.appendChild(empty);
-    }
+    buildDiagramListRows(w, diagramsList, diagrams);
   });
   diagramsContent.appendChild(diagramsList);
   const newDiagramBtn = document.createElement("button");
@@ -6382,7 +6519,8 @@ async function renameWorkspaceDiagramFile(
       tab.path = newFullPath;
       tab.label = newFilename.replace(/\.diagram$/i, "") || "Diagram";
     }
-    renderWorkspaceView();
+    updateWorkspaceDiagramList(w);
+    updateWorkspaceInnerTabLabels();
     refreshTabStrip();
     appendStatus(`Renamed to ${newFilename}`);
     showToast("Renamed");
@@ -6458,7 +6596,8 @@ function renameWorkspaceDiagram(
       // Update the open tab label if this diagram is currently open.
       const tab = w.innerDiagramTabs.find((t) => t.diagramId === diagramId);
       if (tab) tab.label = newName;
-      renderWorkspaceView();
+      updateWorkspaceDiagramList(w);
+      updateWorkspaceInnerTabLabels();
       refreshTabStrip();
       appendStatus(`Renamed diagram to "${newName}"`);
       showToast("Renamed");
@@ -6518,7 +6657,7 @@ async function openWorkspaceDiagramById(
       bindActiveTab();
       refreshTabStrip();
       updateEditorContentVisibility();
-      renderWorkspaceView();
+      updateWorkspaceInnerTabLabels();
       return;
     }
 
@@ -6539,7 +6678,7 @@ async function openWorkspaceDiagramById(
     bindActiveTab();
     refreshTabStrip();
     updateEditorContentVisibility();
-    renderWorkspaceView();
+    renderWorkspaceMain(w);
     appendStatus(`Opened diagram "${diagramName}"`);
   } catch (e) {
     showToast("Open failed: " + (e as Error).message);
@@ -6561,31 +6700,34 @@ function wsDiagramToFrontend(w: WorkspaceDoc, wd: import("./types").WsDiagram): 
     };
   });
 
-  // Build relationships from placements + catalog data.
-  const relationships: Relationship[] = (wd.relationships || []).map(rp => {
+  // Build relationships from placements + catalog data. Only include relationships
+  // that can be fully resolved (both tables on diagram) so lines render correctly.
+  // Use first field as fallback when catalog has empty field names (e.g. legacy data).
+  const relationships: Relationship[] = [];
+  for (const rp of wd.relationships || []) {
     const catalogRel = w.catalogRelationships.find(cr => cr.id === rp.catalogRelationshipId);
     const srcTable = tables.find(t => t.catalogTableId === catalogRel?.sourceCatalogTableId);
     const tgtTable = tables.find(t => t.catalogTableId === catalogRel?.targetCatalogTableId);
+    if (!srcTable || !tgtTable) continue;
     let sourceFieldId = "";
     let targetFieldId = "";
-    if (srcTable && catalogRel) {
-      const f = srcTable.fields.find(f => f.name === catalogRel.sourceFieldName);
-      sourceFieldId = f?.id ?? "";
+    if (catalogRel) {
+      const srcField = srcTable.fields.find(f => f.name === catalogRel.sourceFieldName);
+      const tgtField = tgtTable.fields.find(f => f.name === catalogRel.targetFieldName);
+      sourceFieldId = srcField?.id ?? srcTable.fields[0]?.id ?? "";
+      targetFieldId = tgtField?.id ?? tgtTable.fields[0]?.id ?? "";
     }
-    if (tgtTable && catalogRel) {
-      const f = tgtTable.fields.find(f => f.name === catalogRel.targetFieldName);
-      targetFieldId = f?.id ?? "";
-    }
-    return {
+    if (!sourceFieldId || !targetFieldId) continue;
+    relationships.push({
       id: rp.id,
-      sourceTableId: srcTable?.id ?? "",
+      sourceTableId: srcTable.id,
       sourceFieldId,
-      targetTableId: tgtTable?.id ?? "",
+      targetTableId: tgtTable.id,
       targetFieldId,
       label: rp.label,
       catalogRelationshipId: rp.catalogRelationshipId,
-    };
-  });
+    });
+  }
 
   return {
     version: wd.version || 1,
@@ -6670,6 +6812,21 @@ async function wsSaveDiagram(w: WorkspaceDoc, inner: InnerDiagramTab): Promise<v
   await bridge.saveDiagram(w.workspaceId, JSON.stringify(wsDiagram));
 }
 
+/**
+ * Single "save this tab" helper: sync relationships to catalog, persist diagram
+ * (SQLite or legacy file), then clear dirty. Uses only inner.store (no global store).
+ * Throws on failure so callers can handle (toast, keep tab open, etc.).
+ */
+async function saveWorkspaceDiagramTab(w: WorkspaceDoc, inner: InnerDiagramTab): Promise<void> {
+  await syncDiagramRelationshipsToCatalog(w, inner.store.getDiagram());
+  if (inner.diagramId) {
+    await wsSaveDiagram(w, inner);
+  } else if (inner.path) {
+    await bridge.saveFile(inner.path, JSON.stringify(inner.store.getDiagram()));
+  }
+  inner.store.clearDirty();
+}
+
 /** Legacy wrapper: open a .diagram file (for backward compatibility during migration). */
 async function openWorkspaceDiagramFile(
   w: WorkspaceDoc,
@@ -6687,7 +6844,7 @@ async function openWorkspaceDiagramFile(
       bindActiveTab();
       refreshTabStrip();
       updateEditorContentVisibility();
-      renderWorkspaceView();
+      updateWorkspaceInnerTabLabels();
       return;
     }
     const label = filename.replace(/\.diagram$/i, "") || "Diagram";
@@ -6702,7 +6859,7 @@ async function openWorkspaceDiagramFile(
     bindActiveTab();
     refreshTabStrip();
     updateEditorContentVisibility();
-    renderWorkspaceView();
+    renderWorkspaceMain(w);
     appendStatus(`Opened ${filename}`);
   } catch (e) {
     showToast("Open failed: " + (e as Error).message);
@@ -6804,32 +6961,25 @@ async function createWorkspaceDiagramWithName(
     );
     showToast("New diagram (save failed)");
   }
-  renderWorkspaceView();
+  renderWorkspaceMain(w);
+  updateWorkspaceDiagramList(w);
 }
 
 function newWorkspaceDiagram(w: WorkspaceDoc): void {
   showNewDiagramModal(w);
 }
 
-function switchWorkspaceInnerTab(w: WorkspaceDoc, index: number): void {
+async function switchWorkspaceInnerTab(w: WorkspaceDoc, index: number): Promise<void> {
   if (index === w.activeInnerDiagramIndex) return;
   persistViewportToStore();
   const leavingInner = w.innerDiagramTabs[w.activeInnerDiagramIndex];
-  // Flush-save the leaving tab if still dirty (safety net; auto-save should have saved it).
+  // Flush-save the leaving tab if still dirty so changes are not lost.
   if (leavingInner && leavingInner.store.isDirty()) {
-    const diagram = leavingInner.store.getDiagram();
-    syncDiagramRelationshipsToCatalog(w, diagram)
-      .then(() =>
-        leavingInner.diagramId
-          ? wsSaveDiagram(w, leavingInner)
-          : bridge.saveFile(leavingInner.path, JSON.stringify(diagram))
-      )
-      .then(() => {
-        leavingInner.store.clearDirty();
-        refreshTabStrip();
-        if (workspacePanelEl) renderWorkspaceView();
-      })
-      .catch(() => showToast("Auto-save failed"));
+    try {
+      await saveWorkspaceDiagramTab(w, leavingInner);
+    } catch {
+      showToast("Auto-save failed");
+    }
   }
   w.activeInnerDiagramIndex = index;
   bindActiveTab();
@@ -6847,18 +6997,10 @@ async function closeWorkspaceInnerTab(
   // Flush-save if still dirty (safety net; auto-save should have saved it).
   if (inner.store.isDirty()) {
     try {
-      await syncDiagramRelationshipsToCatalog(w, inner.store.getDiagram());
-      if (inner.diagramId) {
-        await wsSaveDiagram(w, inner);
-      } else if (inner.path) {
-        await bridge.saveFile(
-          inner.path,
-          JSON.stringify(inner.store.getDiagram())
-        );
-      }
-      inner.store.clearDirty();
+      await saveWorkspaceDiagramTab(w, inner);
     } catch {
-      // Best-effort on close.
+      showToast("Could not save diagram; close cancelled to avoid losing changes");
+      return;
     }
   }
   w.innerDiagramTabs.splice(index, 1);
@@ -6870,7 +7012,7 @@ async function closeWorkspaceInnerTab(
   bindActiveTab();
   refreshTabStrip();
   updateEditorContentVisibility();
-  renderWorkspaceView();
+  renderWorkspaceMain(w);
 }
 
 async function saveWorkspaceSettingsFromModal(
@@ -6969,7 +7111,7 @@ function showWorkspaceSettingsModal(w: WorkspaceDoc): void {
     bindActiveTab();
     refreshTabStrip();
     updateEditorContentVisibility();
-    renderWorkspaceView();
+    updateWorkspaceCatalogList(w);
     appendStatus(`Cleared table catalog (${count} tables removed)`);
     showToast("Table catalog cleared");
   };
@@ -7482,7 +7624,7 @@ async function removeCatalogTable(
   }
   refreshTabStrip();
   updateEditorContentVisibility();
-  renderWorkspaceView();
+  updateWorkspaceCatalogList(w);
   showToast("Removed from catalog");
 }
 
@@ -8253,14 +8395,20 @@ function createDiagramRelationshipsFromCatalog(
       (t) => t.catalogTableId === otherCatalogId
     );
     if (!otherTable) continue;
-    const ourFieldName = weAreSource
+    let ourFieldName = weAreSource
       ? catRel.sourceFieldName
       : catRel.targetFieldName;
-    const otherFieldName = weAreSource
+    let otherFieldName = weAreSource
       ? catRel.targetFieldName
       : catRel.sourceFieldName;
-    const ourField = newTable.fields.find((f) => f.name === ourFieldName);
-    const otherField = otherTable.fields.find((f) => f.name === otherFieldName);
+    let ourField = newTable.fields.find((f) => f.name === ourFieldName);
+    let otherField = otherTable.fields.find((f) => f.name === otherFieldName);
+    if (!ourField || !otherField) {
+      if (!ourFieldName && newTable.fields.length > 0)
+        ourField = newTable.fields[0];
+      if (!otherFieldName && otherTable.fields.length > 0)
+        otherField = otherTable.fields[0];
+    }
     if (!ourField || !otherField) continue;
     const sourceTableId = weAreSource ? newTable.id : otherTable.id;
     const targetTableId = weAreSource ? otherTable.id : newTable.id;
@@ -8369,7 +8517,7 @@ async function syncTableToCatalogAndDiagrams(tableId: string): Promise<void> {
   await wsSaveFullCatalog(w);
   refreshTabStrip();
   updateEditorContentVisibility();
-  renderWorkspaceView();
+  updateWorkspaceCatalogList(w);
 }
 
 /** Add a table at (x, y). In a workspace, also add to catalog and link (table id = catalog id). */
@@ -8406,7 +8554,7 @@ function addTableToCurrentDiagram(x: number, y: number): void {
     render();
     refreshTabStrip();
     updateEditorContentVisibility();
-    renderWorkspaceView();
+    updateWorkspaceCatalogList(w);
     appendStatus("Table added to diagram and catalog.");
   } else {
     doc.store.addTable(x, y);

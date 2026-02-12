@@ -120,21 +120,51 @@ func ToMermaid(d Diagram) string {
 	return out
 }
 
-// ToPlantUML outputs PlantUML class diagram syntax from the diagram.
+// ToPlantUML outputs PlantUML entity-relationship diagram syntax from the diagram.
 func ToPlantUML(d Diagram) string {
 	out := "@startuml\n"
+
+	// Build a table-ID → alias map using sanitised names.
 	tblByID := make(map[string]string)
 	for i, t := range d.Tables {
-		tblByID[t.ID] = "e" + fmt.Sprintf("%d", i)
+		tblByID[t.ID] = fmt.Sprintf("e%d", i)
 	}
+
+	// Emit entities.
 	for _, t := range d.Tables {
 		alias := tblByID[t.ID]
-		out += "entity \"" + t.Name + "\" as " + alias + " {\n"
+		out += fmt.Sprintf("entity \"%s\" as %s {\n", t.Name, alias)
+
+		// Separate PK fields from non-PK fields.
+		var pkFields, otherFields []Field
 		for _, f := range t.Fields {
-			out += "  * " + f.Name + " : " + f.Type + "\n"
+			if f.PrimaryKey {
+				pkFields = append(pkFields, f)
+			} else {
+				otherFields = append(otherFields, f)
+			}
 		}
-		out += "}\n"
+
+		// PK section (above the separator).
+		for _, f := range pkFields {
+			out += fmt.Sprintf("  * %s : %s\n", f.Name, f.Type)
+		}
+		if len(pkFields) > 0 {
+			out += "  --\n"
+		}
+		// Non-PK section (below the separator).
+		for _, f := range otherFields {
+			prefix := " "
+			if !f.Nullable {
+				prefix = "*"
+			}
+			out += fmt.Sprintf("  %s %s : %s\n", prefix, f.Name, f.Type)
+		}
+
+		out += "}\n\n"
 	}
+
+	// Emit relationships.
 	for _, r := range d.Relationships {
 		src := tblByID[r.SourceTableID]
 		tgt := tblByID[r.TargetTableID]
@@ -144,8 +174,40 @@ func ToPlantUML(d Diagram) string {
 		if tgt == "" {
 			tgt = r.TargetTableID
 		}
-		out += src + " ||--o{ " + tgt + "\n"
+		arrow := plantUMLCardinality(r.Cardinality)
+		label := ""
+		if r.Label != "" {
+			label = " : " + r.Label
+		} else if r.Name != "" {
+			label = " : " + r.Name
+		}
+		out += fmt.Sprintf("%s %s %s%s\n", src, arrow, tgt, label)
 	}
+
 	out += "@enduml\n"
 	return out
+}
+
+// plantUMLCardinality maps a cardinality string to PlantUML relationship notation.
+func plantUMLCardinality(c string) string {
+	switch c {
+	case "1-to-1":
+		return "||--||"
+	case "1-to-many":
+		return "||--|{"
+	case "1-to-0/many":
+		return "||--o{"
+	case "many-to-1":
+		return "}|--||"
+	case "many-to-many":
+		return "}|--|{"
+	case "0/1-to-0/1":
+		return "|o--o|"
+	case "0/1-to-many":
+		return "|o--|{"
+	case "many-to-0/many":
+		return "}|--o{"
+	default:
+		return "||--o{"
+	}
 }
